@@ -43,9 +43,8 @@ jobs:
 
       - name: Build debug APK
         run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleDebug
+          chmod +x android/gradlew
+          bash native-android/gradle-build.sh assembleDebug
 
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
@@ -110,10 +109,9 @@ jobs:
       - name: Build signed APK for OTA
         if: ${{ steps.signing.outputs.enabled == 'true' }}
         run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleRelease
-          find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print
+          chmod +x android/gradlew
+          bash native-android/gradle-build.sh assembleRelease
+          find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print
 
       - name: Verify and prepare direct-download APK
         if: ${{ steps.signing.outputs.enabled == 'true' }}

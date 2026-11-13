@@ -87,10 +87,9 @@ jobs:
 
       - name: Build signed APK
         run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleRelease
-          find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print
+          chmod +x android/gradlew
+          bash native-android/gradle-build.sh assembleRelease
+          find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print
 
       - name: Publish APK to GitHub Releases
         env:
