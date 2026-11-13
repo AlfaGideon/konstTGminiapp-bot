@@ -82,12 +82,15 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease
+          find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print
 
       - name: Publish APK to GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp android/app/build/outputs/apk/release/app-release.apk botcraft-studio.apk
+          APK_PATH="$(find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -n "$APK_PATH" || { echo 'No release APK file found'; exit 1; }
+          cp "$APK_PATH" botcraft-studio.apk
           gh release create "$GITHUB_REF_NAME" botcraft-studio.apk \
             --title "Botcraft Studio $GITHUB_REF_NAME" \
             --notes "Обновление Botcraft Studio для Android. Скачать APK и подтвердить установку на устройстве."
