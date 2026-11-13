@@ -71,6 +71,21 @@ jobs:
           code = 1000 + int(os.environ['VERSION_CODE'])
           text = text.replace('versionCode 1', f'versionCode {code}', 1)
           text = text.replace('versionName "1.0"', f'versionName "{version}"', 1)
+          signing_config = '''    signingConfigs {
+            release {
+                storeFile file('release-keystore.jks')
+                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+            }
+        }
+'''
+          if 'signingConfigs {' not in text:
+              text = text.replace('    buildTypes {', signing_config + '    buildTypes {', 1)
+          if 'signingConfig signingConfigs.release' not in text:
+              text = text.replace('    buildTypes {\n        release {', '    buildTypes {\n        release {\n            signingConfig signingConfigs.release', 1)
+          if 'signingConfig signingConfigs.release' not in text:
+              raise SystemExit('Could not configure release APK signing')
           gradle.write_text(text)
           with open(os.environ['GITHUB_ENV'], 'a') as out:
               for name in ('ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD'):
