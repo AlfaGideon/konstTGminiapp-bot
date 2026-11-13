@@ -35,10 +35,11 @@ jobs:
       - name: Create Android project
         run: npm run android:add
 
-      - name: Build web bundle and sync Android assets
+      - name: Prepare generated Android project
         run: |
           export VITE_APP_VERSION="0.1.${GITHUB_RUN_NUMBER}"
           npm run android:sync
+          bash native-android/install.sh
 
       - name: Build debug APK
         run: |
