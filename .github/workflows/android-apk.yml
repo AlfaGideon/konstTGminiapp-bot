@@ -113,10 +113,21 @@ jobs:
           set -euo pipefail
           APK_PATH="$(find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
           test -n "$APK_PATH" || { echo 'Release APK not found'; exit 1; }
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
-          test -n "$APKSIGNER" || { echo 'Android apksigner not found'; exit 1; }
-          "$APKSIGNER" verify --verbose "$APK_PATH"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          BUILD_TOOLS="$SDK_ROOT/build-tools"
+          if [ ! -d "$BUILD_TOOLS" ]; then
+            echo "Android build-tools directory not found: $BUILD_TOOLS"
+            echo "ANDROID_HOME=${ANDROID_HOME:-<unset>} ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-<unset>}"
+            exit 1
+          fi
+          APKSIGNER="$(find "$BUILD_TOOLS" -name apksigner -print | sort -V | tail -n 1)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "Android apksigner not found under $BUILD_TOOLS"
+            find "$BUILD_TOOLS" -maxdepth 2 -type f -print | head -n 50
+            exit 1
+          fi
+          echo "Verifying $APK_PATH using $APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs "$APK_PATH"
           cp "$APK_PATH" botcraft-studio.apk
           sha256sum botcraft-studio.apk
 
