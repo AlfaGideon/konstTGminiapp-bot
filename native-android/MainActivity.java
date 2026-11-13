@@ -3,6 +3,7 @@ package ru.botcraft.studio;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DownloadManager;
+import android.Manifest;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -17,8 +18,11 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -29,20 +33,15 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.util.Base64;
 import android.widget.Toast;
-
-import androidx.core.content.FileProvider;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -51,16 +50,28 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
+import java.security.KeyStore;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
 
 /** A fully native Android shell and project studio. It intentionally never creates a WebView. */
 public class MainActivity extends Activity {
     private static final String PREFS = "botcraft-native";
     private static final String PROJECTS_KEY = "projects";
+    private static final String BOT_TOKEN_CIPHER_KEY = "telegram_bot_token_ciphertext";
+    private static final String BOT_TOKEN_IV_KEY = "telegram_bot_token_iv";
+    private static final String BOT_NAME_KEY = "telegram_bot_username";
+    private static final String BOT_RUNNING_KEY = "telegram_bot_running";
+    private static final String BOT_STATUS_KEY = "telegram_bot_status";
+    private static final String ACTIVE_WORLD_KEY = "active_world_id";
+    private static final String BOT_TOKEN_KEY_ALIAS = "botcraft-telegram-token-v1";
     private static final int INSTALL_PERMISSION_REQUEST = 411;
+    private static final int NOTIFICATION_PERMISSION_REQUEST = 412;
     private static final int TAB_HOME = 0;
     private static final int TAB_TEMPLATES = 1;
     private static final int TAB_PROJECTS = 2;
@@ -68,12 +79,22 @@ public class MainActivity extends Activity {
     private static final String RELEASES_API = "https://api.github.com/repos/AlfaGideon/konstTGminiapp-bot/releases/latest";
 
     private static final Template[] TEMPLATES = new Template[] {
-        new Template("quiz", "Квиз-арена", "Викторина", "Собери друзей, отвечайте на вопросы и поднимайтесь в таблице лидеров.", "Командная", "🧠"),
-        new Template("clicker", "Тап-фабрика", "Кликер", "Запускай производство, открывай апгрейды и соревнуйся за рекорд.", "На каждый день", "⚡"),
-        new Template("memory", "Мемори-дуэль", "Пазл", "Находи пары быстрее соперников. Несколько размеров поля и личный рекорд.", "На скорость", "🃏"),
-        new Template("word", "Словолов", "Слова", "Отгадывай слово по подсказкам и делись результатом в чате.", "На логику", "АБ"),
-        new Template("reaction", "Реакция", "Аркада", "Жди сигнал, нажимай вовремя и сравнивай время реакции.", "На рекорд", "↯"),
-        new Template("daily", "Миссия дня", "Квест", "Короткое ежедневное задание с серией дней и наградой за возвращение.", "Серия дней", "✦")
+        new Template("start", "Вход в мир", "Сценарий", "Стартовый узел: приветствие, выбор персонажа и первое действие игрока.", "Основа", "⌂"),
+        new Template("dialogue", "Диалог", "Диалог", "Реплики NPC, варианты ответа и переход к следующему шагу.", "История", "…"),
+        new Template("npc", "NPC-персонаж", "Персонажи", "Имя, портрет-заглушка, характер и набор доступных реплик.", "Мир", "♙"),
+        new Template("choice", "Выбор игрока", "Логика", "Ветвление сюжета по выбору игрока или его параметрам.", "Алгоритм", "⑂"),
+        new Template("quest", "Квест", "Задания", "Цели, этапы, условия завершения и награды за выполнение.", "Прогресс", "⚑"),
+        new Template("shop", "Торговая площадка", "Экономика", "Каталог предметов, цены, валюта и действия покупки/продажи.", "Торговля", "¤"),
+        new Template("inventory", "Инвентарь", "Предметы", "Предметы игрока, экипировка, расходники и лимит вместимости.", "Система", "▤"),
+        new Template("battle", "Бой", "Сражения", "Пошаговый бой, характеристики, очередь ходов и исход сражения.", "Система", "⚔"),
+        new Template("loot", "Награда и добыча", "Награды", "Выдача предметов, валюты и опыта с правилами редкости.", "Награды", "✦"),
+        new Template("condition", "Проверка условия", "Логика", "Проверка уровня, флага, предмета или результата предыдущего шага.", "Алгоритм", "?"),
+        new Template("travel", "Переход между локациями", "Мир", "Карта, доступные места, требования входа и точка назначения.", "Навигация", "⌖"),
+        new Template("craft", "Создание предмета", "Экономика", "Рецепт, требуемые ресурсы, результат и проверка инвентаря.", "Ремесло", "⚒"),
+        new Template("guild", "Гильдия и группа", "Социальное", "Приглашения, роли, общий прогресс и совместные цели.", "Мультиплеер", "♧"),
+        new Template("raid", "Рейдовый босс", "Сражения", "Общий босс, вклад участников и распределение наград.", "Мультиплеер", "♜"),
+        new Template("timer", "Таймер и ожидание", "События", "Задержка, расписание, перезарядка и повторное событие.", "События", "◷"),
+        new Template("admin", "Действие администратора", "Администрирование", "Служебное сообщение, модерация или ручное событие мира.", "Админка", "⚙")
     };
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -85,7 +106,7 @@ public class MainActivity extends Activity {
     private TextView updateStatus;
     private int activeTab = TAB_HOME;
     private String screen = "home";
-    private String selectedTemplate = "quiz";
+    private String selectedTemplate = "start";
     private String editingId = "";
     private String themeChoice = "system";
     private boolean dark;
@@ -123,13 +144,12 @@ public class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
-        if (!"home".equals(screen)) {
-            screen = "home";
-            activeTab = TAB_HOME;
-            render();
-        } else {
-            super.onBackPressed();
-        }
+        if ("admin".equals(screen)) screen = "editor";
+        else if ("editor".equals(screen)) { screen = "projects"; activeTab = TAB_PROJECTS; }
+        else if ("builder".equals(screen)) { screen = "home"; activeTab = TAB_HOME; }
+        else if (!"home".equals(screen)) { screen = "home"; activeTab = TAB_HOME; }
+        else { super.onBackPressed(); return; }
+        render();
     }
 
     private boolean resolveDarkMode() {
@@ -174,6 +194,8 @@ public class MainActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
         if ("builder".equals(screen)) renderBuilder();
+        else if ("editor".equals(screen)) renderEditor();
+        else if ("admin".equals(screen)) renderAdmin();
         else if (activeTab == TAB_TEMPLATES) renderTemplates();
         else if (activeTab == TAB_PROJECTS) renderProjects();
         else if (activeTab == TAB_SETTINGS) renderSettings();
@@ -190,11 +212,12 @@ public class MainActivity extends Activity {
         nav.setBackgroundColor(colorSurface());
         nav.setElevation(dp(10));
         nav.setPadding(dp(8), dp(5), dp(8), dp(5));
-        String[] labels = {"Главная", "Игры", "Проекты", "Настройки"};
+        String[] labels = {"Миры", "Механики", "Проекты", "Настройки"};
         String[] marks = {"⌂", "✦", "▤", "⚙"};
+        int selectedTab = ("editor".equals(screen) || "admin".equals(screen)) ? TAB_PROJECTS : activeTab;
         for (int i = 0; i < labels.length; i++) {
             final int tab = i;
-            boolean selected = ("builder".equals(screen) ? TAB_TEMPLATES : activeTab) == i;
+            boolean selected = selectedTab == i;
             LinearLayout item = new LinearLayout(this);
             item.setOrientation(LinearLayout.VERTICAL);
             item.setGravity(Gravity.CENTER);
@@ -222,16 +245,16 @@ public class MainActivity extends Activity {
     }
 
     private void renderHome() {
-        addBrandHeader("Botcraft", "СТУДИЯ ИГР");
+        addBrandHeader("Botcraft", "БОТ + MINI APP");
         addSpace(20);
-        TextView eyebrow = text("ТВОЯ ИДЕЯ — УЖЕ ИГРА", 11, colorPrimary(), true);
+        TextView eyebrow = text("КОНСТРУКТОР MMORPG ДЛЯ TELEGRAM", 11, colorPrimary(), true);
         page.addView(eyebrow);
-        TextView title = text("Создавай игры\nдля Telegram", 31, colorText(), true);
+        TextView title = text("Собери свой\nигровой мир", 31, colorText(), true);
         title.setLineSpacing(dp(1), 1.0f);
         LinearLayout.LayoutParams titleLp = params(-1, -2);
         titleLp.topMargin = dp(8);
         page.addView(title, titleLp);
-        TextView intro = text("Собери механику, настрой правила, проверь проект и подготовь его к запуску — всё в одном приложении.", 15, colorMuted(), false);
+        TextView intro = text("Собирай мир из связанных узлов: NPC и диалоги, квесты, торговля, бои и правила переходов. APK — админка; запуск для игроков потребует работающего Telegram-обработчика.", 15, colorMuted(), false);
         intro.setLineSpacing(dp(3), 1.0f);
         LinearLayout.LayoutParams introLp = params(-1, -2);
         introLp.topMargin = dp(10);
@@ -239,18 +262,18 @@ public class MainActivity extends Activity {
 
         LinearLayout start = cardColumn();
         start.setBackground(round(dark ? "#292744" : "#EEEFFF", 22));
-        TextView badge = text("КОНСТРУКТОР · БЕЗ КОДА НА СТАРТЕ", 10, colorPrimary(), true);
+        TextView badge = text("ВИЗУАЛЬНЫЙ RPG-КОНСТРУКТОР", 10, colorPrimary(), true);
         start.addView(badge);
-        TextView startTitle = text("Какую игру\nсоздадим сегодня?", 21, colorText(), true);
+        TextView startTitle = text("Один мир.\nМного систем.", 21, colorText(), true);
         LinearLayout.LayoutParams st = params(-1, -2); st.topMargin = dp(8); start.addView(startTitle, st);
-        TextView startCopy = text("Выбери сценарий — дальше можно настроить название и сохранить проект на устройстве.", 13, colorMuted(), false);
+        TextView startCopy = text("Создай мир, редактируй игровые узлы и подключи своего Telegram-бота прямо в панели APK. Игровой онлайн-обработчик подключается отдельно.", 13, colorMuted(), false);
         LinearLayout.LayoutParams sc = params(-1, -2); sc.topMargin = dp(5); start.addView(startCopy, sc);
-        TextView create = actionButton("＋   Выбрать игру", true);
+        TextView create = actionButton("＋   Создать игровой мир", true);
         LinearLayout.LayoutParams cp = params(-1, 50); cp.topMargin = dp(16); start.addView(create, cp);
-        create.setOnClickListener(v -> navigate(TAB_TEMPLATES));
+        create.setOnClickListener(v -> startNewWorld());
         LinearLayout.LayoutParams slp = params(-1, -2); slp.topMargin = dp(18); page.addView(start, slp);
 
-        addSectionTitle("С чего начать", "Подборка для первого проекта");
+        addSectionTitle("Базовые блоки", "Начни с входа в мир и персонажей");
         addTemplateCard(TEMPLATES[0], false);
         addTemplateCard(TEMPLATES[1], false);
         addTemplateCard(TEMPLATES[2], false);
@@ -267,13 +290,15 @@ public class MainActivity extends Activity {
     }
 
     private void renderTemplates() {
-        addBrandHeader("Каталог игр", "6 СЦЕНАРИЕВ");
+        addBrandHeader("Библиотека механик", TEMPLATES.length + " БЛОКОВ");
         addSpace(16);
-        TextView title = text("Выбери механику", 26, colorText(), true);
+        TextView title = text("Собери алгоритм игры", 26, colorText(), true);
         page.addView(title);
-        TextView copy = text("Каждый сценарий — отправная точка. Можно переименовать игру, сохранить проект и выгрузить стартовый архив.", 14, colorMuted(), false);
+        TextView copy = text("Это не готовые игры, а узлы конструктора. Добавляй блоки в мир, меняй тексты и соединяй переходами — например: NPC → диалог → выбор → квест.", 14, colorMuted(), false);
         LinearLayout.LayoutParams cp = params(-1, -2); cp.topMargin = dp(6); page.addView(copy, cp);
-        EditText search = editText("Поиск по играм");
+        TextView scope = text("MVP: ветвления и базовые демо-режимы квеста, магазина, боя, инвентаря и наград. Остальные блоки пока работают как редактируемые сцены/переходы; онлайн-мультиплеера и общей базы нет.", 12, colorMuted(), false);
+        LinearLayout.LayoutParams scopeLp = params(-1, -2); scopeLp.topMargin = dp(8); page.addView(scope, scopeLp);
+        EditText search = editText("Поиск по механикам");
         LinearLayout.LayoutParams searchLp = params(-1, 50); searchLp.topMargin = dp(16); page.addView(search, searchLp);
         templateList = new LinearLayout(this);
         templateList.setOrientation(LinearLayout.VERTICAL);
@@ -287,7 +312,7 @@ public class MainActivity extends Activity {
         LinearLayout tip = cardColumn();
         TextView tipTitle = text("Не уверен, что выбрать?", 14, colorText(), true);
         tip.addView(tipTitle);
-        TextView tipText = text("Квиз подходит для компании, кликер — для коротких сессий, а «Миссия дня» помогает возвращать игроков.", 12, colorMuted(), false);
+        TextView tipText = text("Добавляй игровые механики в редакторе мира и соединяй их в свой сценарий.", 12, colorMuted(), false);
         LinearLayout.LayoutParams tl = params(-1, -2); tl.topMargin = dp(4); tip.addView(tipText, tl);
         LinearLayout.LayoutParams tipLp = params(-1, -2); tipLp.topMargin = dp(6); page.addView(tip, tipLp);
     }
@@ -311,22 +336,22 @@ public class MainActivity extends Activity {
     }
 
     private void renderProjects() {
-        addBrandHeader("Мои проекты", projects.size() + " СОХРАНЕНО");
+        addBrandHeader("Мои миры", projects.size() + " СОХРАНЕНО");
         addSpace(16);
         page.addView(text("Твоя коллекция", 26, colorText(), true));
-        TextView copy = text("Черновики остаются на телефоне и доступны без сети.", 14, colorMuted(), false);
+        TextView copy = text("Сценарии мира хранятся локально. Открой мир, чтобы редактировать узлы, переходы и экран Mini App.", 14, colorMuted(), false);
         LinearLayout.LayoutParams cp = params(-1, -2); cp.topMargin = dp(5); page.addView(copy, cp);
-        TextView newProject = actionButton("＋   Новый проект", true);
+        TextView newProject = actionButton("＋   Новый мир", true);
         LinearLayout.LayoutParams np = params(-1, 50); np.topMargin = dp(16); page.addView(newProject, np);
-        newProject.setOnClickListener(v -> navigate(TAB_TEMPLATES));
+        newProject.setOnClickListener(v -> startNewWorld());
         addSpace(10);
         if (projects.isEmpty()) {
             LinearLayout empty = cardColumn();
             empty.setGravity(Gravity.CENTER);
             TextView emptyMark = text("✦", 28, colorPrimary(), true); emptyMark.setGravity(Gravity.CENTER); empty.addView(emptyMark);
-            TextView emptyTitle = text("Первый проект начинается с идеи", 16, colorText(), true); emptyTitle.setGravity(Gravity.CENTER);
+            TextView emptyTitle = text("Первый мир начинается с идеи", 16, colorText(), true); emptyTitle.setGravity(Gravity.CENTER);
             LinearLayout.LayoutParams et = params(-1, -2); et.topMargin = dp(7); empty.addView(emptyTitle, et);
-            TextView emptyCopy = text("Выбери механику из каталога — и сохрани свой первый черновик.", 13, colorMuted(), false); emptyCopy.setGravity(Gravity.CENTER);
+            TextView emptyCopy = text("Создай мир, затем добавляй сцены и настраивай игровые переходы.", 13, colorMuted(), false); emptyCopy.setGravity(Gravity.CENTER);
             LinearLayout.LayoutParams ec = params(-1, -2); ec.topMargin = dp(4); empty.addView(emptyCopy, ec);
             LinearLayout.LayoutParams ep = params(-1, -2); ep.topMargin = dp(8); page.addView(empty, ep);
             return;
@@ -341,12 +366,11 @@ public class MainActivity extends Activity {
             TextView detail = text(t.category + "  ·  " + formatDate(new Date(project.optLong("updatedAt", System.currentTimeMillis()))), 12, colorMuted(), false);
             LinearLayout.LayoutParams dl = params(-1, -2); dl.topMargin = dp(5); card.addView(detail, dl);
             LinearLayout actions = new LinearLayout(this); actions.setOrientation(LinearLayout.HORIZONTAL);
-            TextView export = actionButton("Скачать архив", false);
-            LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(0, dp(44), 1); ep.topMargin = dp(12); actions.addView(export, ep);
+            TextView open = actionButton("Конструктор", true);
+            LinearLayout.LayoutParams op = new LinearLayout.LayoutParams(0, dp(44), 1); op.topMargin = dp(12); actions.addView(open, op);
             TextView remove = actionButton("Удалить", false);
             LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, dp(44), 1); rp.setMargins(dp(8), dp(12), 0, 0); actions.addView(remove, rp);
-            String projectName = project.optString("name", "game");
-            export.setOnClickListener(v -> exportProject(projectName, t));
+            open.setOnClickListener(v -> openProjectEditor(id));
             remove.setOnClickListener(v -> confirmDelete(id));
             LinearLayout.LayoutParams al = params(-1, -2); card.addView(actions, al);
             LinearLayout.LayoutParams cl = params(-1, -2); cl.topMargin = dp(10); page.addView(card, cl);
@@ -360,6 +384,7 @@ public class MainActivity extends Activity {
         TextView intro = text("Оформление, обновления и локальные данные.", 14, colorMuted(), false);
         LinearLayout.LayoutParams il = params(-1, -2); il.topMargin = dp(5); page.addView(intro, il);
 
+        addBotConnectionCard();
         addSectionTitle("Внешний вид", "Настрой под себя");
         LinearLayout themeCard = cardColumn();
         addThemeOption(themeCard, "system", "Как в системе", "Следовать настройкам Android");
@@ -383,11 +408,11 @@ public class MainActivity extends Activity {
         addSectionTitle("Хранилище", "Только данные приложения");
         LinearLayout storage = cardColumn();
         storage.addView(text(projects.size() + " локальных проектов", 15, colorText(), true));
-        TextView storageCopy = text("Проекты хранятся на этом устройстве. Их можно отдельно экспортировать в ZIP.", 12, colorMuted(), false);
+        TextView storageCopy = text("Миры и настройки подключения Telegram-бота хранятся на этом устройстве.", 12, colorMuted(), false);
         LinearLayout.LayoutParams sl = params(-1, -2); sl.topMargin = dp(4); storage.addView(storageCopy, sl);
         TextView clear = actionButton("Очистить проекты", false);
         LinearLayout.LayoutParams cl = params(-1, 46); cl.topMargin = dp(12); storage.addView(clear, cl);
-        clear.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Удалить все проекты?").setMessage("Действие нельзя отменить. Сначала скачай архивы, если хочешь сохранить исходники.").setNegativeButton("Отмена", null).setPositiveButton("Удалить", (d, w) -> { projects.clear(); saveProjects(); render(); }).show());
+        clear.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Удалить все проекты?").setMessage("Действие нельзя отменить. Все локально сохранённые миры будут удалены.").setNegativeButton("Отмена", null).setPositiveButton("Удалить", (d, w) -> { projects.clear(); saveProjects(); render(); }).show());
         page.addView(storage);
 
         TextView about = text("Botcraft Studio · Android\nНативный интерфейс · проекты доступны офлайн", 11, colorMuted(), false);
@@ -397,14 +422,14 @@ public class MainActivity extends Activity {
 
     private void renderBuilder() {
         Template template = findTemplate(selectedTemplate);
-        addBrandHeader("Новый проект", "ШАГ 1 ИЗ 2");
-        TextView back = text("‹   Назад к играм", 14, colorPrimary(), true);
+        addBrandHeader("Новый RPG-мир", "НАСТРОЙКА МИРА");
+        TextView back = text("‹   Назад к механикам", 14, colorPrimary(), true);
         LinearLayout.LayoutParams bp = params(-1, 44); bp.topMargin = dp(8); page.addView(back, bp);
         back.setGravity(Gravity.CENTER_VERTICAL); back.setOnClickListener(v -> navigate(TAB_TEMPLATES));
         addSpace(8);
         TextView title = text(template.emoji + "  " + template.title, 25, colorText(), true);
         page.addView(title);
-        TextView copy = text(template.description, 14, colorMuted(), false);
+        TextView copy = text("Этот блок станет первой сценой мира. После создания ты сможешь добавить NPC, диалоги, торговлю, квесты и связать узлы переходами.", 14, colorMuted(), false);
         LinearLayout.LayoutParams cp = params(-1, -2); cp.topMargin = dp(7); page.addView(copy, cp);
 
         LinearLayout form = cardColumn();
@@ -418,23 +443,443 @@ public class MainActivity extends Activity {
         }
         TextView tip = text("Потом это название можно изменить в списке проектов.", 12, colorMuted(), false);
         LinearLayout.LayoutParams tp = params(-1, -2); tp.topMargin = dp(5); form.addView(tip, tp);
-        TextView typeLabel = text("Что будет в архиве", 14, colorText(), true);
+        TextView typeLabel = text("С чем начнём", 14, colorText(), true);
         LinearLayout.LayoutParams typeLp = params(-1, -2); typeLp.topMargin = dp(18); form.addView(typeLabel, typeLp);
-        addFeatureLine(form, "Игровой экран", "Стартовый интерфейс и игровая механика");
-        addFeatureLine(form, "Telegram-бот", "Команда /start и кнопка запуска Mini App");
-        addFeatureLine(form, "Инструкция", "README с шагами публикации");
-        TextView save = actionButton(editingId.isEmpty() ? "Сохранить и скачать ZIP" : "Сохранить изменения", true);
+        addFeatureLine(form, "Сценарий", "Первый узел и связанные переходы");
+        addFeatureLine(form, "Telegram-бот", "Подключается по токену из панели администратора APK");
+        addFeatureLine(form, "Публикация игры", "Нужен доступный HTTPS-адрес для запуска Mini App в Telegram");
+        TextView save = actionButton("Создать мир и открыть конструктор", true);
         LinearLayout.LayoutParams saveLp = params(-1, 52); saveLp.topMargin = dp(18); form.addView(save, saveLp);
         save.setOnClickListener(v -> {
             String projectName = name.getText().toString().trim();
             if (projectName.isEmpty()) { name.setError("Укажи название проекта"); name.requestFocus(); return; }
             JSONObject saved = saveProject(projectName, template.id, editingId);
             editingId = saved.optString("id", "");
-            Toast.makeText(this, "Проект сохранён", Toast.LENGTH_SHORT).show();
-            exportProject(projectName, template);
+            preferences.edit().putString(ACTIVE_WORLD_KEY, editingId).apply();
+            if (!saved.has("nodes") || saved.optJSONArray("nodes") == null || saved.optJSONArray("nodes").length() == 0) initializeWorldNodes(saved, template.id);
+            saveProjects();
+            screen = "editor";
+            activeTab = TAB_PROJECTS;
+            Toast.makeText(this, "Мир создан — добавь первые узлы", Toast.LENGTH_SHORT).show();
+            render();
         });
-        TextView privacy = text("Бот-токен в архив не добавляется — его подключают на своём сервере после экспорта.", 12, colorMuted(), false);
+        TextView privacy = text("Токен Telegram можно подключить в панели администратора APK. Публикация игрового сценария для игроков пока требует доступного хостинга.", 12, colorMuted(), false);
         LinearLayout.LayoutParams privacyLp = params(-1, -2); privacyLp.topMargin = dp(12); page.addView(privacy, privacyLp);
+    }
+
+    private void startNewWorld() {
+        selectedTemplate = "start";
+        editingId = "";
+        screen = "builder";
+        activeTab = TAB_PROJECTS;
+        render();
+    }
+
+    private void openProjectEditor(String id) {
+        if (findProject(id) == null) return;
+        preferences.edit().putString(ACTIVE_WORLD_KEY, id).apply();
+        editingId = id;
+        screen = "editor";
+        activeTab = TAB_PROJECTS;
+        render();
+    }
+
+    private void initializeWorldNodes(JSONObject project, String templateId) {
+        if (project == null) return;
+        JSONArray nodes = project.optJSONArray("nodes");
+        if (nodes != null && nodes.length() > 0) return;
+        Template start = findTemplate(templateId);
+        JSONObject node = createNode(start);
+        try { node.put("title", "Начало приключения"); node.put("text", "Добро пожаловать в " + project.optString("name", "наш мир") + "! Куда отправимся?"); }
+        catch (Exception ignored) { }
+        nodes = new JSONArray(); nodes.put(node);
+        try { project.put("nodes", nodes); project.put("startNode", node.optString("id")); project.put("updatedAt", System.currentTimeMillis()); }
+        catch (Exception ignored) { }
+        saveProjects();
+    }
+
+    private JSONObject createNode(Template template) {
+        JSONObject node = new JSONObject();
+        try {
+            node.put("id", UUID.randomUUID().toString());
+            node.put("type", template.id);
+            node.put("title", template.title);
+            node.put("text", template.description);
+            node.put("next", "");
+            node.put("choices", new JSONArray());
+        } catch (Exception ignored) { }
+        return node;
+    }
+
+    private JSONArray worldNodes(JSONObject project) {
+        JSONArray nodes = project.optJSONArray("nodes");
+        if (nodes == null) { nodes = new JSONArray(); try { project.put("nodes", nodes); } catch (Exception ignored) { } }
+        return nodes;
+    }
+
+    private JSONObject findNode(JSONObject project, String id) {
+        JSONArray nodes = worldNodes(project);
+        for (int i = 0; i < nodes.length(); i++) {
+            JSONObject node = nodes.optJSONObject(i);
+            if (node != null && id.equals(node.optString("id"))) return node;
+        }
+        return null;
+    }
+
+    private void touchProject(JSONObject project) {
+        try { project.put("updatedAt", System.currentTimeMillis()); } catch (Exception ignored) { }
+        saveProjects();
+    }
+
+    private void renderEditor() {
+        JSONObject project = findProject(editingId);
+        if (project == null) { screen = "projects"; renderProjects(); return; }
+        initializeWorldNodes(project, project.optString("template", "start"));
+        JSONArray nodes = worldNodes(project);
+        addBrandHeader("Конструктор мира", nodes.length() + " УЗЛОВ");
+        TextView worldTitle = text(project.optString("name", "Без названия"), 25, colorText(), true);
+        LinearLayout.LayoutParams titleLp = params(-1, -2); titleLp.topMargin = dp(12); page.addView(worldTitle, titleLp);
+        TextView help = text("Нажми на узел, чтобы изменить текст. Связывай переходы и варианты ответов — сценарий хранится на устройстве.", 13, colorMuted(), false);
+        LinearLayout.LayoutParams helpLp = params(-1, -2); helpLp.topMargin = dp(5); page.addView(help, helpLp);
+        LinearLayout controls = new LinearLayout(this); controls.setOrientation(LinearLayout.HORIZONTAL);
+        TextView add = actionButton("＋ Добавить узел", true);
+        TextView admin = actionButton("Админка", false);
+        LinearLayout.LayoutParams a = new LinearLayout.LayoutParams(0, dp(46), 1); a.topMargin = dp(14); controls.addView(add, a);
+        LinearLayout.LayoutParams b = new LinearLayout.LayoutParams(0, dp(46), 1); b.setMargins(dp(7), dp(14), 0, 0); controls.addView(admin, b);
+        page.addView(controls);
+        add.setOnClickListener(v -> showNodeLibrary());
+        admin.setOnClickListener(v -> { screen = "admin"; render(); });
+        TextView graphHeading = text("ЦЕПОЧКА СЦЕНАРИЯ", 11, colorPrimary(), true);
+        LinearLayout.LayoutParams gh = params(-1, -2); gh.topMargin = dp(22); page.addView(graphHeading, gh);
+        for (int i = 0; i < nodes.length(); i++) {
+            JSONObject node = nodes.optJSONObject(i); if (node == null) continue;
+            final String nodeId = node.optString("id", "");
+            Template type = findTemplate(node.optString("type", "dialogue"));
+            LinearLayout card = cardColumn();
+            LinearLayout head = new LinearLayout(this); head.setGravity(Gravity.CENTER_VERTICAL);
+            TextView badge = text(type.emoji, 22, colorPrimary(), true); badge.setGravity(Gravity.CENTER);
+            badge.setBackground(round(dark ? "#30314C" : "#F0EFFF", 13)); head.addView(badge, new LinearLayout.LayoutParams(dp(46), dp(46)));
+            LinearLayout meta = new LinearLayout(this); meta.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams ml = new LinearLayout.LayoutParams(0, -2, 1); ml.setMargins(dp(10), 0, 0, 0);
+            boolean isStart = nodeId.equals(project.optString("startNode", ""));
+            meta.addView(text((isStart ? "СТАРТ · " : "УЗЕЛ " + (i + 1) + " · ") + type.title, 11, colorPrimary(), true));
+            TextView nt = text(node.optString("title", type.title), 16, colorText(), true); LinearLayout.LayoutParams ntp = params(-1, -2); ntp.topMargin = dp(2); meta.addView(nt, ntp);
+            head.addView(meta, ml); card.addView(head);
+            TextView body = text(node.optString("text", ""), 13, colorMuted(), false); LinearLayout.LayoutParams bodyLp = params(-1, -2); bodyLp.topMargin = dp(10); card.addView(body, bodyLp);
+            JSONArray choices = node.optJSONArray("choices");
+            if (choices != null && choices.length() > 0) {
+                for (int c = 0; c < choices.length(); c++) {
+                    JSONObject choice = choices.optJSONObject(c);
+                    if (choice != null) {
+                        final int choiceIndex = c;
+                        TextView choiceLine = text("↳ " + choice.optString("label", "Вариант") + "  →  " + nodeTitle(project, choice.optString("target", "")) + "  ·  настроить", 12, colorPrimary(), false);
+                        choiceLine.setPadding(0, dp(5), 0, dp(5));
+                        choiceLine.setOnClickListener(v -> chooseChoiceTarget(project, nodeId, choiceIndex));
+                        card.addView(choiceLine);
+                    }
+                }
+            }
+            LinearLayout actions = new LinearLayout(this); actions.setOrientation(LinearLayout.HORIZONTAL);
+            TextView edit = actionButton("Изменить", false); TextView link = actionButton("Переход →", false); TextView remove = actionButton("Удалить", false);
+            LinearLayout.LayoutParams ep = new LinearLayout.LayoutParams(0, dp(42), 1); ep.topMargin = dp(10); actions.addView(edit, ep);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(42), 1); lp.setMargins(dp(5), dp(10), 0, 0); actions.addView(link, lp);
+            LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, dp(42), 1); rp.setMargins(dp(5), dp(10), 0, 0); actions.addView(remove, rp);
+            card.addView(actions); edit.setOnClickListener(v -> editNode(project, nodeId)); link.setOnClickListener(v -> chooseNodeTarget(project, nodeId));
+            remove.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Удалить узел?").setMessage("Связи на этот узел станут пустыми.").setNegativeButton("Отмена", null).setPositiveButton("Удалить", (d, w) -> { deleteNode(project, nodeId); render(); }).show());
+            LinearLayout.LayoutParams cardLp = params(-1, -2); cardLp.topMargin = dp(10); page.addView(card, cardLp);
+            String nextId = node.optString("next", "");
+            if (!nextId.isEmpty()) {
+                TextView arrow = text("↓  ДАЛЕЕ: " + nodeTitle(project, nextId), 10, colorMuted(), true);
+                arrow.setGravity(Gravity.CENTER);
+                page.addView(arrow, params(-1, 28));
+            }
+        }
+        TextView botSetup = actionButton("Настроить Telegram-бота в APK", true);
+        LinearLayout.LayoutParams xp = params(-1, 50); xp.topMargin = dp(18); page.addView(botSetup, xp);
+        botSetup.setOnClickListener(v -> { screen = "admin"; render(); });
+        TextView backendNote = text("Управление миром остаётся в APK. Чтобы игроки запускали Mini App через Telegram, нужен публичный HTTPS-адрес игры и обработчик событий бота; токен сам по себе не публикует данные с телефона.", 12, colorMuted(), false);
+        LinearLayout.LayoutParams bn = params(-1, -2); bn.topMargin = dp(10); page.addView(backendNote, bn);
+    }
+
+    private String nodeTitle(JSONObject project, String id) {
+        JSONObject node = findNode(project, id);
+        return node == null ? "не подключён" : node.optString("title", "Узел");
+    }
+
+    private void showNodeLibrary() {
+        String[] labels = new String[TEMPLATES.length]; for (int i = 0; i < TEMPLATES.length; i++) labels[i] = TEMPLATES[i].emoji + "  " + TEMPLATES[i].title;
+        new AlertDialog.Builder(this).setTitle("Добавить игровой блок").setItems(labels, (d, which) -> addWorldNode(TEMPLATES[which])).setNegativeButton("Отмена", null).show();
+    }
+
+    private void addWorldNode(Template template) {
+        JSONObject project = findProject(editingId); if (project == null) return;
+        JSONArray nodes = worldNodes(project); JSONObject node = createNode(template);
+        try {
+            if (nodes.length() > 0) { JSONObject previous = nodes.optJSONObject(nodes.length() - 1); if (previous != null && previous.optString("next", "").isEmpty()) previous.put("next", node.optString("id")); }
+            nodes.put(node); touchProject(project);
+        } catch (Exception ignored) { }
+        render();
+    }
+
+    private void editNode(JSONObject project, String nodeId) {
+        JSONObject node = findNode(project, nodeId); if (node == null) return;
+        LinearLayout fields = new LinearLayout(this); fields.setOrientation(LinearLayout.VERTICAL); fields.setPadding(dp(8), dp(4), dp(8), 0);
+        EditText title = editText("Заголовок узла"); title.setText(node.optString("title", "")); fields.addView(title, params(-1, 50));
+        EditText body = editText("Текст сцены, условия или результата"); body.setSingleLine(false); body.setMinLines(3); body.setGravity(Gravity.TOP); body.setText(node.optString("text", "")); LinearLayout.LayoutParams bp = params(-1, 110); bp.topMargin = dp(8); fields.addView(body, bp);
+        EditText options = editText("Варианты по строкам; магазин: Зелье - 10 золота"); options.setSingleLine(false); options.setMinLines(2); options.setGravity(Gravity.TOP);
+        JSONArray oldChoices = node.optJSONArray("choices"); StringBuilder optionText = new StringBuilder();
+        if (oldChoices != null) for (int i = 0; i < oldChoices.length(); i++) { JSONObject ch = oldChoices.optJSONObject(i); if (ch != null) { if (optionText.length() > 0) optionText.append('\n'); optionText.append(ch.optString("label", "")); } }
+        options.setText(optionText.toString()); LinearLayout.LayoutParams op = params(-1, 90); op.topMargin = dp(8); fields.addView(options, op);
+        EditText rule = editText("Для проверки: gold>=50, xp>=20, has:Зелье, quest:Название квеста");
+        rule.setText(node.optString("condition", ""));
+        LinearLayout.LayoutParams ruleLp = params(-1, 50); ruleLp.topMargin = dp(8); fields.addView(rule, ruleLp);
+        new AlertDialog.Builder(this).setTitle("Редактировать узел").setView(fields).setNegativeButton("Отмена", null).setPositiveButton("Сохранить", (d, w) -> {
+            try {
+                node.put("title", title.getText().toString().trim().isEmpty() ? "Без названия" : title.getText().toString().trim());
+                node.put("text", body.getText().toString().trim());
+                JSONArray choices = new JSONArray();
+                JSONArray previousChoices = node.optJSONArray("choices");
+                for (String line : options.getText().toString().split("\\n")) {
+                    String label = line.trim();
+                    if (!label.isEmpty()) {
+                        int index = choices.length();
+                        JSONObject ch = new JSONObject();
+                        ch.put("label", label);
+                        JSONObject previous = previousChoices == null ? null : previousChoices.optJSONObject(index);
+                        ch.put("target", previous == null ? "" : previous.optString("target", ""));
+                        choices.put(ch);
+                    }
+                }
+                node.put("choices", choices);
+                node.put("condition", rule.getText().toString().trim());
+                touchProject(project);
+            } catch (Exception ignored) { }
+            render();
+        }).show();
+    }
+
+    private void chooseChoiceTarget(JSONObject project, String sourceId, int choiceIndex) {
+        JSONObject source = findNode(project, sourceId);
+        JSONArray nodes = worldNodes(project);
+        JSONArray choices = source == null ? null : source.optJSONArray("choices");
+        if (choices == null || choiceIndex < 0 || choiceIndex >= choices.length()) return;
+        String[] labels = new String[nodes.length() + 1];
+        labels[0] = "— Завершить ветку —";
+        for (int i = 0; i < nodes.length(); i++) {
+            JSONObject node = nodes.optJSONObject(i);
+            labels[i + 1] = node == null ? "Узел" : node.optString("title", "Узел");
+        }
+        new AlertDialog.Builder(this).setTitle("Переход для варианта").setItems(labels, (d, which) -> {
+            try {
+                JSONObject choice = choices.optJSONObject(choiceIndex);
+                if (choice != null) choice.put("target", which == 0 ? "" : nodes.optJSONObject(which - 1).optString("id"));
+                touchProject(project);
+            } catch (Exception ignored) { }
+            render();
+        }).setNegativeButton("Отмена", null).show();
+    }
+
+    private void chooseNodeTarget(JSONObject project, String sourceId) {
+        JSONObject source = findNode(project, sourceId); JSONArray nodes = worldNodes(project);
+        if (source == null || nodes.length() < 2) { Toast.makeText(this, "Сначала добавь ещё один узел", Toast.LENGTH_SHORT).show(); return; }
+        String[] labels = new String[nodes.length() + 1]; labels[0] = "— Без перехода —";
+        for (int i = 0; i < nodes.length(); i++) { JSONObject node = nodes.optJSONObject(i); labels[i + 1] = node == null ? "Узел" : node.optString("title", "Узел"); }
+        new AlertDialog.Builder(this).setTitle("Следующий узел").setItems(labels, (d, which) -> {
+            try { source.put("next", which == 0 ? "" : nodes.optJSONObject(which - 1).optString("id")); touchProject(project); }
+            catch (Exception ignored) { }
+            render();
+        }).setNegativeButton("Отмена", null).show();
+    }
+
+    private void deleteNode(JSONObject project, String nodeId) {
+        JSONArray old = worldNodes(project), kept = new JSONArray();
+        for (int i = 0; i < old.length(); i++) { JSONObject node = old.optJSONObject(i); if (node == null || nodeId.equals(node.optString("id"))) continue;
+            if (nodeId.equals(node.optString("next"))) try { node.put("next", ""); } catch (Exception ignored) { }
+            JSONArray choices = node.optJSONArray("choices"); if (choices != null) { JSONArray valid = new JSONArray(); for (int c = 0; c < choices.length(); c++) { JSONObject ch = choices.optJSONObject(c); if (ch != null && !nodeId.equals(ch.optString("target"))) valid.put(ch); } try { node.put("choices", valid); } catch (Exception ignored) { } }
+            kept.put(node);
+        }
+        try { project.put("nodes", kept); if (nodeId.equals(project.optString("startNode"))) project.put("startNode", kept.length() == 0 ? "" : kept.optJSONObject(0).optString("id")); touchProject(project); } catch (Exception ignored) { }
+    }
+
+    private void addBotConnectionCard() {
+        addSectionTitle("Telegram-бот", "Токен хранится в APK под защитой Android Keystore");
+        LinearLayout card = cardColumn();
+        String connectedName = preferences.getString(BOT_NAME_KEY, "");
+        boolean running = preferences.getBoolean(BOT_RUNNING_KEY, false);
+        String serviceStatus = preferences.getString(BOT_STATUS_KEY, "");
+        String statusText = running && !serviceStatus.isEmpty() ? serviceStatus : connectedName.isEmpty() ? "Бот ещё не подключён" : "Проверен бот @" + connectedName;
+        TextView status = text(statusText, 14, connectedName.isEmpty() ? colorMuted() : colorAccent(), true);
+        card.addView(status);
+        TextView botFather = actionButton("Создать бота в @BotFather", false);
+        LinearLayout.LayoutParams fatherLp = params(-1, 44); fatherLp.topMargin = dp(8); card.addView(botFather, fatherLp);
+        botFather.setOnClickListener(v -> { try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/BotFather"))); } catch (Exception ignored) { } });
+        EditText token = editText("Вставь токен от @BotFather");
+        token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        LinearLayout.LayoutParams tokenLp = params(-1, 50); tokenLp.topMargin = dp(9); card.addView(token, tokenLp);
+        TextView hint = text("Сначала создай бота у @BotFather и вставь выданный токен. Приложение проверяет токен, а после нажатия «Запустить бота» отвечает по сценарию выбранного мира. Кнопка отключения удаляет токен только с телефона; для отзыва используй @BotFather.", 12, colorMuted(), false);
+        LinearLayout.LayoutParams hintLp = params(-1, -2); hintLp.topMargin = dp(6); card.addView(hint, hintLp);
+        TextView connect = actionButton(connectedName.isEmpty() ? "Подключить бота" : "Проверить подключение", true);
+        LinearLayout.LayoutParams connectLp = params(-1, 46); connectLp.topMargin = dp(10); card.addView(connect, connectLp);
+        connect.setOnClickListener(v -> connectTelegramBot(token, status, connect));
+        TextView openBot = actionButton("Открыть бота в Telegram", false);
+        LinearLayout.LayoutParams openLp = params(-1, 44); openLp.topMargin = dp(7); card.addView(openBot, openLp);
+        openBot.setEnabled(!connectedName.isEmpty());
+        openBot.setOnClickListener(v -> {
+            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/" + connectedName))); }
+            catch (Exception e) { Toast.makeText(this, "Не удалось открыть Telegram", Toast.LENGTH_SHORT).show(); }
+        });
+        TextView runBot = actionButton(running ? "Бот работает · остановить" : "Запустить бота на этом телефоне", true);
+        LinearLayout.LayoutParams runLp = params(-1, 46); runLp.topMargin = dp(7); card.addView(runBot, runLp);
+        runBot.setEnabled(!connectedName.isEmpty());
+        runBot.setOnClickListener(v -> {
+            if (preferences.getBoolean(BOT_RUNNING_KEY, false)) stopLocalBot();
+            else new AlertDialog.Builder(this).setTitle("Запустить бота на телефоне?")
+                .setMessage("APK будет получать сообщения Telegram через long polling и отвечать по сценарию выбранного мира. Телефон должен быть включён и подключён к интернету. Это переключает бота с webhook на polling, если webhook был настроен. Режим Mini App требует отдельного HTTPS-хостинга.")
+                .setNegativeButton("Отмена", null).setPositiveButton("Запустить", (d, w) -> startLocalBot()).show();
+        });
+        TextView disconnect = actionButton("Отключить бота", false);
+        LinearLayout.LayoutParams disconnectLp = params(-1, 44); disconnectLp.topMargin = dp(7); card.addView(disconnect, disconnectLp);
+        disconnect.setOnClickListener(v -> {
+            stopService(new Intent(this, WorldBotService.class));
+            try {
+                preferences.edit().remove(BOT_TOKEN_CIPHER_KEY).remove(BOT_TOKEN_IV_KEY).remove(BOT_NAME_KEY).remove("telegram_update_offset").putBoolean(BOT_RUNNING_KEY, false).apply();
+                KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore"); keyStore.load(null);
+                if (keyStore.containsAlias(BOT_TOKEN_KEY_ALIAS)) keyStore.deleteEntry(BOT_TOKEN_KEY_ALIAS);
+            } catch (Exception ignored) { }
+            Toast.makeText(this, "Токен удалён с устройства", Toast.LENGTH_SHORT).show(); render();
+        });
+        page.addView(card);
+        TextView limitation = text("Запущенный режим обрабатывает сообщения ботом на этом телефоне, пока Android держит foreground-сервис активным и есть интернет. Это не облачный сервер: при выключенном телефоне бот не отвечает. Для Mini App всё равно нужен публичный HTTPS-адрес, а для надёжной круглосуточной игры — хостинг/backend.", 12, colorMuted(), false);
+        LinearLayout.LayoutParams limitationLp = params(-1, -2); limitationLp.topMargin = dp(8); page.addView(limitation, limitationLp);
+    }
+
+    private SecretKey telegramTokenKey() throws Exception {
+        KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
+        keyStore.load(null);
+        if (keyStore.containsAlias(BOT_TOKEN_KEY_ALIAS)) {
+            KeyStore.SecretKeyEntry entry = (KeyStore.SecretKeyEntry) keyStore.getEntry(BOT_TOKEN_KEY_ALIAS, null);
+            return entry.getSecretKey();
+        }
+        KeyGenerator generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+        generator.init(new KeyGenParameterSpec.Builder(BOT_TOKEN_KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setRandomizedEncryptionRequired(true)
+            .build());
+        return generator.generateKey();
+    }
+
+    private void storeTelegramToken(String token) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, telegramTokenKey());
+        byte[] encrypted = cipher.doFinal(token.getBytes(StandardCharsets.UTF_8));
+        preferences.edit()
+            .putString(BOT_TOKEN_CIPHER_KEY, Base64.encodeToString(encrypted, Base64.NO_WRAP))
+            .putString(BOT_TOKEN_IV_KEY, Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP))
+            .apply();
+    }
+
+    private String readTelegramToken() throws Exception {
+        String encrypted = preferences.getString(BOT_TOKEN_CIPHER_KEY, "");
+        String iv = preferences.getString(BOT_TOKEN_IV_KEY, "");
+        if (encrypted.isEmpty() || iv.isEmpty()) return "";
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, telegramTokenKey(), new GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)));
+        return new String(cipher.doFinal(Base64.decode(encrypted, Base64.NO_WRAP)), StandardCharsets.UTF_8);
+    }
+
+    private void startLocalBot() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_PERMISSION_REQUEST);
+            Toast.makeText(this, "Разреши постоянное уведомление и затем снова нажми «Запустить бота»", Toast.LENGTH_LONG).show();
+            return;
+        }
+        Intent service = new Intent(this, WorldBotService.class);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(service);
+            else startService(service);
+            preferences.edit().putBoolean(BOT_RUNNING_KEY, true).putString(BOT_STATUS_KEY, "Запускаю бота на этом телефоне").apply();
+            Toast.makeText(this, "Бот запускается. Android покажет постоянное уведомление.", Toast.LENGTH_LONG).show();
+            render();
+        } catch (Exception e) {
+            preferences.edit().putBoolean(BOT_RUNNING_KEY, false).apply();
+            Toast.makeText(this, "Android не разрешил запустить сервис бота", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void stopLocalBot() {
+        stopService(new Intent(this, WorldBotService.class));
+        preferences.edit().putBoolean(BOT_RUNNING_KEY, false).putString(BOT_STATUS_KEY, "Бот остановлен").apply();
+        Toast.makeText(this, "Бот остановлен", Toast.LENGTH_SHORT).show();
+        render();
+    }
+
+    private void connectTelegramBot(EditText tokenInput, TextView status, TextView button) {
+        String token = tokenInput.getText().toString().trim();
+        if (token.isEmpty()) {
+            try { token = readTelegramToken(); } catch (Exception ignored) { token = ""; }
+        }
+        if (token.isEmpty() || token.contains(" ")) {
+            tokenInput.setError("Вставь токен от @BotFather");
+            return;
+        }
+        final String candidate = token;
+        String storedToken = "";
+        try { storedToken = readTelegramToken(); } catch (Exception ignored) { }
+        final boolean tokenChanged = !candidate.equals(storedToken);
+        status.setText("Проверяю токен в Telegram…"); status.setTextColor(colorMuted());
+        button.setEnabled(false); button.setText("Подключаюсь…");
+        worker.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                URL url = new URL("https://api.telegram.org/bot" + candidate + "/getMe");
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET"); connection.setConnectTimeout(12000); connection.setReadTimeout(12000);
+                JSONObject response = new JSONObject(readAll(connection.getInputStream()));
+                if (!response.optBoolean("ok", false)) throw new IllegalStateException("Telegram не принял токен");
+                JSONObject result = response.optJSONObject("result");
+                String username = result == null ? "" : result.optString("username", "");
+                runOnUiThread(() -> {
+                    try {
+                        String previousName = preferences.getString(BOT_NAME_KEY, "");
+                        if (tokenChanged && preferences.getBoolean(BOT_RUNNING_KEY, false)) {
+                            stopService(new Intent(this, WorldBotService.class));
+                            preferences.edit().putBoolean(BOT_RUNNING_KEY, false).putString(BOT_STATUS_KEY, "Токен обновлён · запусти бота снова").apply();
+                        }
+                        if (!previousName.equals(username)) preferences.edit().remove("telegram_update_offset").apply();
+                        storeTelegramToken(candidate);
+                        preferences.edit().putString(BOT_NAME_KEY, username).apply();
+                        status.setText(username.isEmpty() ? "Бот проверен в Telegram" : "Подключён: @" + username);
+                        status.setTextColor(colorAccent());
+                        tokenInput.setText("");
+                        Toast.makeText(this, "Токен проверен и защищённо сохранён", Toast.LENGTH_SHORT).show();
+                    } catch (Exception e) {
+                        status.setText("Не удалось безопасно сохранить токен на устройстве"); status.setTextColor(colorMuted());
+                    }
+                    button.setEnabled(true); button.setText("Проверить подключение");
+                    render();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    status.setText("Не удалось проверить токен. Проверь его и интернет-соединение."); status.setTextColor(colorMuted());
+                    button.setEnabled(true); button.setText("Повторить подключение");
+                });
+            } finally { if (connection != null) connection.disconnect(); }
+        });
+    }
+
+    private void renderAdmin() {
+        JSONObject project = findProject(editingId); if (project == null) { screen = "projects"; return; }
+        addBrandHeader("Администрирование", "ЛОКАЛЬНЫЙ МИР"); addSpace(12);
+        addBotConnectionCard();
+        addSectionTitle("Параметры мира", "Настройки выбранного проекта");
+        TextView intro = text("Токен бота хранится отдельно и шифруется ключом Android Keystore; в данные игрового мира он не попадает.", 13, colorMuted(), false); LinearLayout.LayoutParams il = params(-1, -2); il.topMargin = dp(5); page.addView(intro, il);
+        LinearLayout card = cardColumn(); LinearLayout.LayoutParams cl = params(-1, -2); cl.topMargin = dp(14); page.addView(card, cl);
+        card.addView(text("Название мира", 14, colorText(), true)); EditText name = editText("Название"); name.setText(project.optString("name", "")); LinearLayout.LayoutParams nl = params(-1, 50); nl.topMargin = dp(7); card.addView(name, nl);
+        TextView save = actionButton("Сохранить параметры", true); LinearLayout.LayoutParams sl = params(-1, 46); sl.topMargin = dp(12); card.addView(save, sl);
+        save.setOnClickListener(v -> { String value = name.getText().toString().trim(); if (value.isEmpty()) { name.setError("Укажи название"); return; } try { project.put("name", value); } catch (Exception ignored) { } touchProject(project); Toast.makeText(this, "Настройки мира сохранены", Toast.LENGTH_SHORT).show(); screen = "editor"; render(); });
+        TextView technical = text("Игроки: пока локальный прототип без общей базы. Для постоянного прогресса и мультиплеера подключи backend и проверку Telegram initData на сервере.", 13, colorMuted(), false); LinearLayout.LayoutParams tp = params(-1, -2); tp.topMargin = dp(16); page.addView(technical, tp);
+        TextView back = actionButton("Назад в конструктор", false); LinearLayout.LayoutParams bl = params(-1, 46); bl.topMargin = dp(16); page.addView(back, bl); back.setOnClickListener(v -> { screen = "editor"; render(); });
     }
 
     private void addFeatureLine(LinearLayout target, String title, String description) {
@@ -630,82 +1075,6 @@ public class MainActivity extends Activity {
             return version == null ? "0.1.0" : version;
         } catch (PackageManager.NameNotFoundException ignored) { return "0.1.0"; }
     }
-
-    private void exportProject(String projectName, Template template) {
-        worker.execute(() -> {
-            File out = null;
-            try {
-                File dir = new File(getCacheDir(), "exports");
-                if (!dir.exists() && !dir.mkdirs()) throw new IllegalStateException("Не удалось создать папку архива");
-                String fileName = safeFileName(projectName) + ".zip";
-                out = new File(dir, fileName);
-                try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(out))) {
-                    putZip(zip, "miniapp/index.html", gameHtml(projectName, template));
-                    putZip(zip, "bot/package.json", "{\n  \"name\": \"" + safeFileName(projectName) + "-bot\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"scripts\": { \"start\": \"node index.js\" },\n  \"dependencies\": { \"dotenv\": \"^16.4.7\", \"node-telegram-bot-api\": \"^0.66.0\" }\n}\n");
-                    putZip(zip, "bot/.env.example", "BOT_TOKEN=\nMINI_APP_URL=https://your-domain.example/\n");
-                    putZip(zip, "bot/index.js", botSource());
-                    putZip(zip, "README.md", readme(projectName, template));
-                }
-                File finalOut = out;
-                runOnUiThread(() -> shareArchive(finalOut, projectName));
-            } catch (Exception error) {
-                runOnUiThread(() -> Toast.makeText(this, "Не удалось собрать ZIP: " + error.getMessage(), Toast.LENGTH_LONG).show());
-            }
-        });
-    }
-
-    private void putZip(ZipOutputStream zip, String path, String content) throws Exception {
-        zip.putNextEntry(new ZipEntry(path));
-        zip.write(content.getBytes(StandardCharsets.UTF_8));
-        zip.closeEntry();
-    }
-
-    private String safeFileName(String value) {
-        String safe = value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9а-яё]+", "-").replaceAll("^-|-$", "");
-        return safe.isEmpty() ? "telegram-game" : safe;
-    }
-
-    private void shareArchive(File file, String name) {
-        if (file == null || !file.exists()) { Toast.makeText(this, "Архив не найден", Toast.LENGTH_SHORT).show(); return; }
-        try {
-            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", file);
-            Intent share = new Intent(Intent.ACTION_SEND);
-            share.setType("application/zip");
-            share.putExtra(Intent.EXTRA_STREAM, uri);
-            share.putExtra(Intent.EXTRA_SUBJECT, "Проект Botcraft Studio — " + name);
-            share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(Intent.createChooser(share, "Сохранить или отправить ZIP"));
-        } catch (Exception e) { Toast.makeText(this, "Не удалось открыть экспорт: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
-    }
-
-    private String readme(String name, Template template) {
-        return "# " + name + "\n\n" + template.description + "\n\n## Что внутри\n- `miniapp/index.html` — автономный игровой экран.\n- `bot/index.js` — Telegram-бот с кнопкой открытия Mini App.\n- `bot/.env.example` — переменные окружения, токен не включён.\n\n## Запуск бота\n1. Установите Node.js 20 или новее.\n2. В папке `bot` выполните `npm install`.\n3. Скопируйте `.env.example` в `.env` и добавьте токен от @BotFather.\n4. Укажите публичный HTTPS URL Mini App в `MINI_APP_URL`.\n5. Запустите `npm start`.\n\n## Публикация Mini App\nЗагрузите содержимое `miniapp` на HTTPS-хостинг и укажите этот адрес в BotFather.\n";
-    }
-
-    private String botSource() {
-        return "require('dotenv').config();\nconst TelegramBot = require('node-telegram-bot-api');\nconst token = process.env.BOT_TOKEN;\nif (!token) throw new Error('Set BOT_TOKEN in .env');\nconst appUrl = process.env.MINI_APP_URL;\nif (!appUrl || !appUrl.startsWith('https://')) throw new Error('Set a public HTTPS MINI_APP_URL');\nconst bot = new TelegramBot(token, { polling: true });\nbot.onText(/\\/start/, (msg) => {\n  bot.sendMessage(msg.chat.id, 'Готов сыграть? Открой игру кнопкой ниже.', {\n    reply_markup: { inline_keyboard: [[{ text: 'Играть', web_app: { url: appUrl } }]] }\n  });\n});\nconsole.log('Bot is running');\n";
-    }
-
-    private String gameHtml(String name, Template template) {
-        String safeTitle = escapeHtml(name);
-        String gameScript;
-        if ("clicker".equals(template.id)) {
-            gameScript = "<p>Очки: <b id='score'>0</b></p><button id='tap'>Тапни и собери заряд</button><script>let n=0;document.getElementById('tap').onclick=()=>document.getElementById('score').textContent=++n;</script>";
-        } else if ("memory".equals(template.id)) {
-            gameScript = "<p>Найди одинаковые символы</p><div id='board' class='board'></div><script>const a=['☀','☀','◆','◆','●','●'].sort(()=>Math.random()-.5);let open=[];a.forEach((x,i)=>{let b=document.createElement('button');b.textContent='?';b.onclick=()=>{if(open.length>1||b.dataset.done)return;b.textContent=x;open.push(b);if(open.length===2){if(open[0].textContent===open[1].textContent){open.forEach(c=>c.dataset.done=1);open=[]}else setTimeout(()=>{open.forEach(c=>c.textContent='?');open=[]},650)}};document.getElementById('board').appendChild(b)});</script>";
-        } else if ("word".equals(template.id)) {
-            gameScript = "<p>Слово из пяти букв. Подсказка: оно бывает у моря.</p><form id='guess'><input id='word' maxlength='5' placeholder='Твоё слово' required><button>Проверить</button></form><p id='result'></p><script>document.getElementById('guess').onsubmit=e=>{e.preventDefault();document.getElementById('result').textContent=document.getElementById('word').value.toLowerCase()==='волна'?'Верно! Отличная догадка.':'Пока не угадал — попробуй ещё раз.'}</script>";
-        } else if ("reaction".equals(template.id)) {
-            gameScript = "<p>Нажми, когда кнопка станет зелёной</p><button id='wait'>Начать попытку</button><p id='result'></p><script>let t;const b=document.getElementById('wait');b.onclick=()=>{if(b.dataset.ready){document.getElementById('result').textContent='Твоя реакция: '+(Date.now()-t)+' мс';b.dataset.ready='';b.textContent='Ещё раз';return}b.textContent='Жди сигнал…';setTimeout(()=>{b.dataset.ready='1';b.textContent='ЖМИ!';t=Date.now()},900+Math.random()*1800)}</script>";
-        } else if ("daily".equals(template.id)) {
-            gameScript = "<p>Выполни пять действий, чтобы закрыть миссию дня.</p><p>Прогресс: <b id='n'>0</b> / 5</p><button id='do'>Выполнить действие</button><p id='done'></p><script>let n=0;document.getElementById('do').onclick=()=>{n=Math.min(5,n+1);document.getElementById('n').textContent=n;if(n===5)document.getElementById('done').textContent='Миссия выполнена! Возвращайся завтра.'}</script>";
-        } else {
-            gameScript = "<p id='q'>Какой язык запускается в браузере?</p><div class='answers'><button data-a='0'>JavaScript</button><button data-a='1'>SQL</button><button data-a='1'>Bash</button></div><p id='result'></p><script>document.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>document.getElementById('result').textContent=b.dataset.a==='0'?'Верно! +1 очко':'Попробуй ещё раз.')</script>";
-        }
-        return "<!doctype html><html lang='ru'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no'><meta name='theme-color' content='#f4f6fa'><title>" + safeTitle + "</title><style>*{box-sizing:border-box}body{font:16px system-ui,sans-serif;margin:0;padding:22px;background:#f4f6fa;color:#20243a}.app{max-width:520px;margin:auto}.brand{font-size:12px;font-weight:800;letter-spacing:1.3px;color:#5549cc}.hero{margin:18px 0 20px}.hero h1{font-size:30px;line-height:1.12;margin:5px 0}.hero p{color:#586276;line-height:1.55}.card{background:#fff;border:1px solid #e0e5ee;border-radius:20px;padding:20px;box-shadow:0 8px 28px #25294a0c}button,input{font:inherit}button{display:block;width:100%;min-height:48px;margin:8px 0;padding:12px 14px;border:1px solid #dfe3ec;border-radius:12px;background:#f8f8fc;color:#252a40;font-weight:700}button:active{background:#efedff;border-color:#5549cc}.board{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.board button{height:76px;font-size:24px}.answers{display:grid;gap:6px}input{width:100%;padding:12px;border:1px solid #dfe3ec;border-radius:10px}#tap{background:#5549cc;color:white}.foot{margin-top:18px;text-align:center;font-size:12px;color:#677084}</style><main class='app'><div class='brand'>BOTCRAFT · TELEGRAM GAME</div><header class='hero'><h1>" + safeTitle + "</h1><p>" + escapeHtml(template.description) + "</p></header><section class='card'>" + gameScript + "</section><p class='foot'>Небольшая игра, собранная в Botcraft Studio</p></main></html>";
-    }
-
-    private String escapeHtml(String value) { return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;"); }
 
     private void registerDownloadReceiver() {
         IntentFilter filter = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
