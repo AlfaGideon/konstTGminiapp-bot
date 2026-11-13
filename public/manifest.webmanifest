@@ -1,0 +1,10 @@
+{
+  "name": "Botcraft Studio",
+  "short_name": "Botcraft",
+  "description": "Конструктор Telegram-ботов и Mini Apps",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f7fb",
+  "theme_color": "#f5f7fb",
+  "icons": []
+}
