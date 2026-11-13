@@ -209,31 +209,33 @@ public final class WorldBotService extends Service {
         if (text.length() > 4000) text = text.substring(0, 4000);
         JSONObject markup = new JSONObject();
         JSONArray keyboard = new JSONArray();
-        JSONArray choices = node.optJSONArray("choices");
-        if (choices != null) for (int i = 0; i < choices.length(); i++) {
-            JSONObject choice = choices.optJSONObject(i);
-            if (choice == null) continue;
-            String target = choice.optString("target", "");
-            if (target.isEmpty()) target = node.optString("next", "");
-            if (target.isEmpty()) continue;
-            JSONObject button = new JSONObject();
-            button.put("text", limit(choice.optString("label", "Дальше"), 64));
-            button.put("callback_data", "node:" + target);
-            JSONArray row = new JSONArray(); row.put(button); keyboard.put(row);
-        }
-        if (keyboard.length() == 0) {
-            String next = node.optString("next", "");
-            if (!next.isEmpty()) {
-                JSONObject button = new JSONObject(); button.put("text", "Продолжить"); button.put("callback_data", "node:" + next);
+        try {
+            JSONArray choices = node.optJSONArray("choices");
+            if (choices != null) for (int i = 0; i < choices.length(); i++) {
+                JSONObject choice = choices.optJSONObject(i);
+                if (choice == null) continue;
+                String target = choice.optString("target", "");
+                if (target.isEmpty()) target = node.optString("next", "");
+                if (target.isEmpty()) continue;
+                JSONObject button = new JSONObject();
+                button.put("text", limit(choice.optString("label", "Дальше"), 64));
+                button.put("callback_data", "node:" + target);
                 JSONArray row = new JSONArray(); row.put(button); keyboard.put(row);
-            } else {
-                String start = world.optString("startNode", "");
-                if (!start.isEmpty()) {
-                    JSONObject button = new JSONObject(); button.put("text", "Начать сначала"); button.put("callback_data", "node:" + start);
+            }
+            if (keyboard.length() == 0) {
+                String next = node.optString("next", "");
+                if (!next.isEmpty()) {
+                    JSONObject button = new JSONObject(); button.put("text", "Продолжить"); button.put("callback_data", "node:" + next);
                     JSONArray row = new JSONArray(); row.put(button); keyboard.put(row);
+                } else {
+                    String start = world.optString("startNode", "");
+                    if (!start.isEmpty()) {
+                        JSONObject button = new JSONObject(); button.put("text", "Начать сначала"); button.put("callback_data", "node:" + start);
+                        JSONArray row = new JSONArray(); row.put(button); keyboard.put(row);
+                    }
                 }
             }
-        }
+        } catch (Exception ignored) { }
         JSONObject payload = new JSONObject();
         try {
             payload.put("chat_id", chatId); payload.put("text", text);
