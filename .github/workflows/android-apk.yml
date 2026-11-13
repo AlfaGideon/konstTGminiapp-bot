@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-debug-apk:
@@ -36,7 +36,9 @@ jobs:
         run: npm run android:add
 
       - name: Build web bundle and sync Android assets
-        run: npm run android:sync
+        run: |
+          export VITE_APP_VERSION="0.1.${GITHUB_RUN_NUMBER}"
+          npm run android:sync
 
       - name: Build debug APK
         run: |
@@ -57,6 +59,7 @@ jobs:
         env:
           ANDROID_SIGNING_BUNDLE: ${{ secrets.ANDROID_SIGNING_BUNDLE }}
           VERSION_CODE: ${{ github.run_number }}
+          RELEASE_VERSION: 0.1.${{ github.run_number }}
         run: |
           set -euo pipefail
           if [ -z "$ANDROID_SIGNING_BUNDLE" ]; then
@@ -82,6 +85,13 @@ jobs:
               '-deststorepass', bundle['keystorePassword'], '-destkeypass', bundle['keyPassword'],
               '-destalias', bundle['keyAlias'],
           ], env=env, check=True)
+          gradle = Path('android/app/build.gradle')
+          text = gradle.read_text()
+          code = 1000 + int(os.environ['VERSION_CODE'])
+          version = os.environ['RELEASE_VERSION']
+          text = text.replace('versionCode 1', f'versionCode {code}', 1)
+          text = text.replace('versionName "1.0"', f'versionName "{version}"', 1)
+          gradle.write_text(text)
           with open(os.environ['GITHUB_ENV'], 'a') as out:
               for name in ('ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD'):
                   out.write(f'{name}={env[name]}\n')
@@ -96,6 +106,39 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease
           find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print
+
+      - name: Verify and prepare direct-download APK
+        if: ${{ steps.signing.outputs.enabled == 'true' }}
+        run: |
+          set -euo pipefail
+          APK_PATH="$(find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -n "$APK_PATH" || { echo 'Release APK not found'; exit 1; }
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
+          test -n "$APKSIGNER" || { echo 'Android apksigner not found'; exit 1; }
+          "$APKSIGNER" verify --verbose "$APK_PATH"
+          cp "$APK_PATH" botcraft-studio.apk
+          sha256sum botcraft-studio.apk
+
+      - name: Publish direct APK download
+        if: ${{ steps.signing.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v0.1.${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" botcraft-studio.apk --clobber
+          else
+            gh release create "$RELEASE_TAG" botcraft-studio.apk \
+              --target "$GITHUB_SHA" \
+              --title "Botcraft Studio $RELEASE_TAG" \
+              --notes "Подписанный Android APK. Скачайте APK напрямую и подтвердите установку на Android."
+          fi
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/botcraft-studio.apk"
+          echo "### Прямая загрузка APK" >> "$GITHUB_STEP_SUMMARY"
+          echo "[$URL]($URL)" >> "$GITHUB_STEP_SUMMARY"
+          echo "$URL"
 
       - name: Upload signed APK artifact
         if: ${{ steps.signing.outputs.enabled == 'true' }}
