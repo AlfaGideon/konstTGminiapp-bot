@@ -71,15 +71,7 @@ jobs:
           code = 1000 + int(os.environ['VERSION_CODE'])
           text = text.replace('versionCode 1', f'versionCode {code}', 1)
           text = text.replace('versionName "1.0"', f'versionName "{version}"', 1)
-          signing_config = '''    signingConfigs {
-            release {
-                storeFile file('release-keystore.jks')
-                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
-                keyAlias System.getenv('ANDROID_KEY_ALIAS')
-                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
-            }
-        }
-'''
+          signing_config = "    signingConfigs {\n        release {\n            storeFile file('release-keystore.jks')\n            storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')\n            keyAlias System.getenv('ANDROID_KEY_ALIAS')\n            keyPassword System.getenv('ANDROID_KEY_PASSWORD')\n        }\n    }\n"
           if 'signingConfigs {' not in text:
               text = text.replace('    buildTypes {', signing_config + '    buildTypes {', 1)
           if 'signingConfig signingConfigs.release' not in text:
