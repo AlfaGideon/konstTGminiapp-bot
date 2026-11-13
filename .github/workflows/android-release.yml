@@ -41,54 +41,43 @@ jobs:
 
       - name: Configure APK signing
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_SIGNING_BUNDLE: ${{ secrets.ANDROID_SIGNING_BUNDLE }}
           RELEASE_VERSION: ${{ github.ref_name }}
           VERSION_CODE: ${{ github.run_number }}
         run: |
           set -euo pipefail
-          test -n "$ANDROID_KEYSTORE_BASE64" || { echo 'Missing ANDROID_KEYSTORE_BASE64 Actions secret'; exit 1; }
-          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo 'Missing ANDROID_KEYSTORE_PASSWORD Actions secret'; exit 1; }
-          test -n "$ANDROID_KEY_ALIAS" || { echo 'Missing ANDROID_KEY_ALIAS Actions secret'; exit 1; }
-          test -n "$ANDROID_KEY_PASSWORD" || { echo 'Missing ANDROID_KEY_PASSWORD Actions secret'; exit 1; }
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release-keystore.p12
-          keytool -importkeystore -noprompt \
-            -srckeystore android/app/release-keystore.p12 -srcstoretype PKCS12 \
-            -srcstorepass "$ANDROID_KEYSTORE_PASSWORD" -srcalias "$ANDROID_KEY_ALIAS" \
-            -destkeystore android/app/release-keystore.jks -deststoretype JKS \
-            -deststorepass "$ANDROID_KEYSTORE_PASSWORD" -destkeypass "$ANDROID_KEY_PASSWORD" \
-            -destalias "$ANDROID_KEY_ALIAS"
-          keytool -list -keystore android/app/release-keystore.jks -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null
-          export ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD
+          test -n "$ANDROID_SIGNING_BUNDLE" || { echo 'Missing ANDROID_SIGNING_BUNDLE Actions secret'; exit 1; }
           python3 - <<'PY'
-          import os
+          import base64, json, os, subprocess
           from pathlib import Path
-          path = Path('android/app/build.gradle')
-          text = path.read_text()
-          signing = '''    signingConfigs {
-                  release {
-                      storeFile file("release-keystore.jks")
-                      storeType "JKS"
-                      storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                      keyAlias System.getenv("ANDROID_KEY_ALIAS")
-                      keyPassword System.getenv("ANDROID_KEY_PASSWORD")
-                  }
-              }
-          '''
-          text = text.replace('    buildTypes {', signing + '    buildTypes {', 1)
-          text = text.replace('        release {\n', '        release {\n            signingConfig signingConfigs.release\n', 1)
-          text = text.replace('versionCode 1', 'versionCode ' + str(1000 + int(os.environ['VERSION_CODE'])), 1)
-          text = text.replace('versionName "1.0"', 'versionName "' + os.environ['RELEASE_VERSION'].removeprefix('v') + '"', 1)
-          path.write_text(text)
+          bundle = json.loads(os.environ['ANDROID_SIGNING_BUNDLE'])
+          required = ('keystoreBase64', 'keystorePassword', 'keyAlias', 'keyPassword')
+          if any(not bundle.get(key) for key in required):
+              raise SystemExit('Signing bundle is missing a required field')
+          Path('android/app/release-keystore.p12').write_bytes(base64.b64decode(bundle['keystoreBase64'], validate=True))
+          env = os.environ.copy()
+          env.update(ANDROID_KEYSTORE_PASSWORD=bundle['keystorePassword'], ANDROID_KEY_ALIAS=bundle['keyAlias'], ANDROID_KEY_PASSWORD=bundle['keyPassword'])
+          subprocess.run([
+              'keytool', '-importkeystore', '-noprompt',
+              '-srckeystore', 'android/app/release-keystore.p12', '-srcstoretype', 'PKCS12',
+              '-srcstorepass', bundle['keystorePassword'], '-srcalias', bundle['keyAlias'],
+              '-destkeystore', 'android/app/release-keystore.jks', '-deststoretype', 'JKS',
+              '-deststorepass', bundle['keystorePassword'], '-destkeypass', bundle['keyPassword'],
+              '-destalias', bundle['keyAlias'],
+          ], env=env, check=True)
+          gradle = Path('android/app/build.gradle')
+          text = gradle.read_text()
+          version = os.environ['RELEASE_VERSION'].removeprefix('v')
+          code = 1000 + int(os.environ['VERSION_CODE'])
+          text = text.replace('versionCode 1', f'versionCode {code}', 1)
+          text = text.replace('versionName "1.0"', f'versionName "{version}"', 1)
+          gradle.write_text(text)
+          with open(os.environ['GITHUB_ENV'], 'a') as out:
+              for name in ('ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD'):
+                  out.write(f'{name}={env[name]}\n')
           PY
 
       - name: Build signed APK
-        env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cd android
           chmod +x gradlew
