@@ -161,11 +161,14 @@ public class MainActivity extends Activity {
         root.setFitsSystemWindows(true);
 
         ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(false);
+        scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
         scroll.setVerticalScrollBarEnabled(false);
+        scroll.setBackgroundColor(colorBg());
         page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
+        page.setGravity(Gravity.TOP);
+        page.setBackgroundColor(colorBg());
         page.setPadding(dp(20), dp(14), dp(20), dp(28));
         scroll.addView(page, new ScrollView.LayoutParams(-1, -2));
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -199,7 +202,7 @@ public class MainActivity extends Activity {
             item.setBackground(round(selected ? (dark ? "#32304F" : "#EFEDFF") : (dark ? "#192132" : "#FFFFFF"), 16));
             TextView mark = text(marks[i], 18, selected ? colorPrimary() : colorMuted(), true);
             mark.setGravity(Gravity.CENTER);
-            TextView label = text(labels[i], 10, selected ? colorPrimary() : colorMuted(), selected);
+            TextView label = text(labels[i], 12, selected ? colorPrimary() : colorMuted(), selected);
             label.setGravity(Gravity.CENTER);
             item.addView(mark);
             item.addView(label);

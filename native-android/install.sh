@@ -13,6 +13,9 @@ text = manifest.read_text()
 permission = '    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />'
 if 'android.permission.REQUEST_INSTALL_PACKAGES' not in text:
     text = text.replace('</manifest>', permission + '\n</manifest>')
+# BridgeActivity normally applies a splash-screen post theme. Our Activity is native and
+# must start directly in the regular no-action-bar app theme instead.
+text = text.replace('android:theme="@style/AppTheme.NoActionBarLaunch"', 'android:theme="@style/AppTheme.NoActionBar"')
 manifest.write_text(text)
 PY
 
