@@ -44,10 +44,65 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: Upload APK artifact
+      - name: Upload debug APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: botcraft-studio-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Configure release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo 'Missing ANDROID_KEYSTORE_BASE64'; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo 'Missing ANDROID_KEYSTORE_PASSWORD'; exit 1; }
+          test -n "$ANDROID_KEY_ALIAS" || { echo 'Missing ANDROID_KEY_ALIAS'; exit 1; }
+          test -n "$ANDROID_KEY_PASSWORD" || { echo 'Missing ANDROID_KEY_PASSWORD'; exit 1; }
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release-keystore.p12
+          export ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path('android/app/build.gradle')
+          text = path.read_text()
+          signing = '''    signingConfigs {
+                  release {
+                      storeFile file("release-keystore.p12")
+                      storeType "PKCS12"
+                      storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                      keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+                  }
+              }
+          '''
+          text = text.replace('    buildTypes {', signing + '    buildTypes {', 1)
+          text = text.replace('        release {\n', '        release {\n            signingConfig signingConfigs.release\n', 1)
+          text = text.replace('versionCode 1', 'versionCode ' + str(1000 + int(os.environ['VERSION_CODE'])), 1)
+          text = text.replace('versionName "1.0"', 'versionName "1.0.0"', 1)
+          path.write_text(text)
+          PY
+
+      - name: Build signed APK for OTA
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease
+
+      - name: Upload signed APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: botcraft-studio-signed-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14
