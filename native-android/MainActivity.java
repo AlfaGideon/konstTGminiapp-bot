@@ -366,13 +366,13 @@ public class MainActivity extends Activity {
 
         addSectionTitle("Обновление", "Проверка прямо в приложении");
         LinearLayout updateCard = cardColumn();
-        TextView version = text("Botcraft Studio  " + BuildConfig.VERSION_NAME, 15, colorText(), true);
+        TextView version = text("Botcraft Studio  " + currentVersion(), 15, colorText(), true);
         updateCard.addView(version);
         TextView updateCopy = text("Проверю свежую версию, скачаю APK и открою системную установку. Android попросит подтвердить обновление.", 12, colorMuted(), false);
         LinearLayout.LayoutParams uc = params(-1, -2); uc.topMargin = dp(5); updateCard.addView(updateCopy, uc);
         TextView check = actionButton("Проверить обновления", true);
         LinearLayout.LayoutParams ck = params(-1, 48); ck.topMargin = dp(12); updateCard.addView(check, ck);
-        updateStatus = text("Версия установлена: " + BuildConfig.VERSION_NAME, 12, colorMuted(), false);
+        updateStatus = text("Версия установлена: " + currentVersion(), 12, colorMuted(), false);
         LinearLayout.LayoutParams us = params(-1, -2); us.topMargin = dp(8); updateCard.addView(updateStatus, us);
         check.setOnClickListener(v -> checkForUpdates(check));
         page.addView(updateCard);
@@ -542,7 +542,8 @@ public class MainActivity extends Activity {
         button.setPadding(dp(14), dp(10), dp(14), dp(10));
         button.setFocusable(true);
         button.setClickable(true);
-        button.setBackground(round(primary ? colorPrimary() : (dark ? "#2A3448" : "#F0EFFF"), 13, primary ? colorPrimary() : colorLine(), 1));
+        int fill = primary ? colorPrimary() : Color.parseColor(dark ? "#2A3448" : "#F0EFFF");
+        button.setBackground(round(fill, 13, primary ? colorPrimary() : colorLine(), 1));
         return button;
     }
 
@@ -619,6 +620,13 @@ public class MainActivity extends Activity {
     }
 
     private String formatDate(Date date) { return new SimpleDateFormat("d MMM yyyy", new Locale("ru" )).format(date); }
+
+    private String currentVersion() {
+        try {
+            String version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            return version == null ? "0.1.0" : version;
+        } catch (PackageManager.NameNotFoundException ignored) { return "0.1.0"; }
+    }
 
     private void exportProject(String projectName, Template template) {
         worker.execute(() -> {
@@ -730,7 +738,7 @@ public class MainActivity extends Activity {
                 final String resultVersion = latest;
                 final String resultUrl = downloadUrl;
                 runOnUiThread(() -> {
-                    String current = BuildConfig.VERSION_NAME;
+                    String current = currentVersion();
                     if (latestVersionIsNewer(resultVersion, current)) {
                         if (resultUrl.isEmpty()) setUpdateMessage("Новая версия найдена, но APK пока не приложен.", false);
                         else new AlertDialog.Builder(this).setTitle("Доступно обновление " + resultVersion).setMessage("Скачаю APK. Затем Android покажет системное окно — подтвердите обновление.").setNegativeButton("Позже", (d, w) -> setUpdateMessage("Обновление доступно: " + resultVersion, true)).setPositiveButton("Скачать", (d, w) -> startApkDownload(resultUrl)).show();
