@@ -3,3 +3,5 @@ dist/
 android/
 .env
 .DS_Store
+
+github-secrets/
