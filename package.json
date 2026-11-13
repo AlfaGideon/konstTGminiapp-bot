@@ -12,6 +12,7 @@
     "android:open": "cap open android"
   },
   "dependencies": {
+    "@capacitor/browser": "^7.0.5",
     "jszip": "^3.10.1"
   },
   "devDependencies": {
