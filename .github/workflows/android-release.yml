@@ -54,6 +54,13 @@ jobs:
           test -n "$ANDROID_KEY_ALIAS" || { echo 'Missing ANDROID_KEY_ALIAS Actions secret'; exit 1; }
           test -n "$ANDROID_KEY_PASSWORD" || { echo 'Missing ANDROID_KEY_PASSWORD Actions secret'; exit 1; }
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release-keystore.p12
+          keytool -importkeystore -noprompt \
+            -srckeystore android/app/release-keystore.p12 -srcstoretype PKCS12 \
+            -srcstorepass "$ANDROID_KEYSTORE_PASSWORD" -srcalias "$ANDROID_KEY_ALIAS" \
+            -destkeystore android/app/release-keystore.jks -deststoretype JKS \
+            -deststorepass "$ANDROID_KEYSTORE_PASSWORD" -destkeypass "$ANDROID_KEY_PASSWORD" \
+            -destalias "$ANDROID_KEY_ALIAS"
+          keytool -list -keystore android/app/release-keystore.jks -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null
           export ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD
           python3 - <<'PY'
           import os
@@ -62,8 +69,8 @@ jobs:
           text = path.read_text()
           signing = '''    signingConfigs {
                   release {
-                      storeFile file("release-keystore.p12")
-                      storeType "PKCS12"
+                      storeFile file("release-keystore.jks")
+                      storeType "JKS"
                       storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
                       keyAlias System.getenv("ANDROID_KEY_ALIAS")
                       keyPassword System.getenv("ANDROID_KEY_PASSWORD")
