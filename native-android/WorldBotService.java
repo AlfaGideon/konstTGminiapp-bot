@@ -600,46 +600,63 @@ public final class WorldBotService extends Service {
         String regionId = regionForGrid(x, y); JSONObject region = findRegion(world, regionId);
         JSONArray visited = player.optJSONArray("visitedRegions"); boolean newRegion = !contains(visited, regionId); if (newRegion) addString(visited, regionId);
         try { player.put("gridX", x); player.put("gridY", y); player.put("currentRegion", regionId); player.put("currentMode", "world"); savePlayer(chatId, player); } catch (Exception ignored) { }
-        StringBuilder text = new StringBuilder("МИРОВАЯ КАРТА · 100 × 100 КЛЕТОК\n");
-        text.append("Клетка (").append(x).append(", ").append(y).append(") · ").append(region == null ? regionId : region.optString("title"));
-        text.append("\nТы всегда остаёшься в центре кадра. Передвижение только по сторонам света — диагоналей нет.\n\n");
-        for (int dy = -3; dy <= 3; dy++) {
-            for (int dx = -3; dx <= 3; dx++) {
-                int cx = x + dx, cy = y + dy;
-                String cell = "⬛";
-                if (cx >= 0 && cx < 100 && cy >= 0 && cy < 100) {
-                    if (dx == 0 && dy == 0) cell = "🧍";
-                    else {
-                        JSONObject event = eventAt(world, cx, cy);
-                        cell = event != null && !contains(player.optJSONArray("resolvedGridEvents"), event.optString("id", "")) ? eventSymbol(event) : regionSymbol(regionForGrid(cx, cy));
-                    }
-                }
-                if (dx > -3) text.append(' '); text.append(cell);
-            }
-            text.append('\n');
-        }
-        text.append("\n🧍 ты  ⚔️ враг  👤 путник  🎁 находка  ✨ святилище  ⬛ край карты");
-        if (newRegion) text.append("\n\nНовая область: ").append(region == null ? regionId : region.optString("title"));
+
+        StringBuilder text = new StringBuilder("МИРОВАЯ КАРТА · 100 × 100\n");
+        text.append("Область: ").append(region == null ? regionId : region.optString("title"));
+        text.append(" · координаты ").append(x).append(", ").append(y);
+        text.append("\nНажми соседнюю клетку или стрелку, чтобы сделать один шаг. Диагоналей нет.");
+        text.append("\n🔒 — непроходимая клетка. Исследуй доступные точки интереса.");
+        if (newRegion) text.append("\nНовая область открыта.");
         if (!notice.isEmpty()) text.append("\n\n").append(notice);
         JSONObject here = eventAt(world, x, y);
         boolean eventAvailable = here != null && !contains(player.optJSONArray("resolvedGridEvents"), here.optString("id", ""));
-        if (eventAvailable) text.append("\n\nУ этой клетки есть событие: ").append(here.optString("title", "Точка интереса"));
+        if (eventAvailable) text.append("\n\nНа этой клетке есть событие: ").append(here.optString("title", "Точка интереса"));
         text.append("\n\n").append(playerSummary(player));
+
         JSONArray keyboard = new JSONArray();
         try {
-            addButtonRow(keyboard, "⬆️ Шаг на север", y > 0 ? "grid:move:up" : "grid:edge");
-            JSONArray middle = new JSONArray();
-            addInlineButton(middle, "⬅️ Запад", x > 0 ? "grid:move:left" : "grid:edge");
-            addInlineButton(middle, eventAvailable ? "🔎 Изучить клетку" : "📍 Ты здесь", eventAvailable ? "grid:interact" : "grid:stay");
-            addInlineButton(middle, "Восток ➡️", x < 99 ? "grid:move:right" : "grid:edge");
-            keyboard.put(middle);
-            addButtonRow(keyboard, "⬇️ Шаг на юг", y < 99 ? "grid:move:down" : "grid:edge");
+            int startX = x - 4, startY = y - 4;
+            for (int rowIndex = 0; rowIndex < 10; rowIndex++) {
+                JSONArray row = new JSONArray();
+                for (int column = 0; column < 10; column++) {
+                    int cx = startX + column, cy = startY + rowIndex;
+                    String label, callback;
+                    if (cx < 0 || cx >= 100 || cy < 0 || cy >= 100) {
+                        label = "⬛"; callback = "grid:void";
+                    } else if (!isGridCellAccessible(cx, cy)) {
+                        label = "🔒"; callback = "grid:void";
+                    } else if (cx == x && cy == y) {
+                        label = "🧍"; callback = "grid:interact";
+                    } else {
+                        JSONObject event = eventAt(world, cx, cy);
+                        label = event != null && !contains(player.optJSONArray("resolvedGridEvents"), event.optString("id", ""))
+                            ? eventSymbol(event) : regionSymbol(regionForGrid(cx, cy));
+                        callback = "grid:cell:" + cx + ":" + cy;
+                    }
+                    addInlineButton(row, label, callback);
+                }
+                keyboard.put(row);
+            }
+            JSONArray directions = new JSONArray();
+            addInlineButton(directions, "⬆️", "grid:move:up");
+            addInlineButton(directions, "⬅️", "grid:move:left");
+            addInlineButton(directions, eventAvailable ? "🔎 Изучить" : "📍 Здесь", eventAvailable ? "grid:interact" : "grid:stay");
+            addInlineButton(directions, "➡️", "grid:move:right");
+            addInlineButton(directions, "⬇️", "grid:move:down");
+            keyboard.put(directions);
             if (!"harbor".equals(regionId)) addButtonRow(keyboard, "⚔️ Охотиться в этой зоне", "grid:hunt");
             addButtonRow(keyboard, "📜 Задания", "ow:quests");
             addButtonRow(keyboard, "👤 Герой и экипировка", "ow:character");
             addButtonRow(keyboard, "🎒 Рюкзак", "ow:inventory");
         } catch (Exception ignored) { }
-        sendPage(token, chatId, text.toString(), keyboard);
+        sendPage(token, chatId, text.toString(), keyboard, null);
+    }
+
+    private boolean isGridCellAccessible(int x, int y) {
+        if (x < 0 || x >= 100 || y < 0 || y >= 100) return false;
+        int localX = x % 10, localY = y % 10;
+        return !(localX == 4 && localY >= 3 && localY <= 6)
+            && !(localX == 5 && (localY == 3 || localY == 6));
     }
 
     private void addInlineButton(JSONArray row, String label, String data) throws Exception {
@@ -648,14 +665,28 @@ public final class WorldBotService extends Service {
 
     private void handleGridAction(String token, long chatId, String action) {
         JSONObject world = activeWorld(); JSONObject player = loadPlayer(chatId, world, false);
-        String[] parts = action.split(":", 3);
+        String[] parts = action.split(":", 4);
         if (parts.length == 0) return;
         if (parts[0].equals("move") && parts.length > 1) { moveGrid(token, chatId, world, player, parts[1]); return; }
+        if (parts[0].equals("cell") && parts.length > 2) {
+            try {
+                int targetX = Integer.parseInt(parts[1]), targetY = Integer.parseInt(parts[2]);
+                int dx = targetX - player.optInt("gridX", 50), dy = targetY - player.optInt("gridY", 50);
+                if (dx == 0 && dy == 0) { showGridEvent(token, chatId, world, player, eventAt(world, targetX, targetY)); return; }
+                if (Math.abs(dx) + Math.abs(dy) != 1) { showGridMap(token, chatId, world, player, "Можно шагнуть только на одну соседнюю клетку."); return; }
+                if (dx == 1) moveGrid(token, chatId, world, player, "right");
+                else if (dx == -1) moveGrid(token, chatId, world, player, "left");
+                else if (dy == 1) moveGrid(token, chatId, world, player, "down");
+                else moveGrid(token, chatId, world, player, "up");
+            } catch (Exception ignored) { showGridMap(token, chatId, world, player, ""); }
+            return;
+        }
         if (parts[0].equals("interact")) { showGridEvent(token, chatId, world, player, eventAt(world, player.optInt("gridX", 50), player.optInt("gridY", 50))); return; }
         if (parts[0].equals("fight") && parts.length > 1) { startGridEventBattle(token, chatId, world, player, parts[1]); return; }
         if (parts[0].equals("resolve") && parts.length > 2) { resolveGridEvent(token, chatId, world, player, parts[1], parts[2]); return; }
         if (parts[0].equals("hunt")) { startGridHunt(token, chatId, world, player); return; }
         if (parts[0].equals("stay")) { showGridMap(token, chatId, world, player, ""); return; }
+        if (parts[0].equals("void")) { showGridMap(token, chatId, world, player, "Эта клетка закрыта или находится за краем карты."); return; }
         if (parts[0].equals("edge")) { showGridMap(token, chatId, world, player, "Ты у края мира: дальше пройти нельзя."); return; }
         showGridMap(token, chatId, world, player, "");
     }
@@ -671,6 +702,7 @@ public final class WorldBotService extends Service {
             default: showGridMap(token, chatId, world, player, "Можно двигаться только вверх, вниз, влево или вправо."); return;
         }
         if (x < 0 || x > 99 || y < 0 || y > 99) { showGridMap(token, chatId, world, player, "Дальше край карты."); return; }
+        if (!isGridCellAccessible(x, y)) { showGridMap(token, chatId, world, player, "Путь закрыт: эта клетка непроходима. Выбери другой маршрут."); return; }
         String prior = player.optString("currentRegion", "harbor"), next = regionForGrid(x, y);
         String notice = "Ты сделал шаг на одну клетку к " + (direction.equals("up") ? "северу" : direction.equals("down") ? "югу" : direction.equals("left") ? "западу" : "востоку") + ".";
         if (!prior.equals(next)) { JSONObject region = findRegion(world, next); notice += " Новая зона: " + (region == null ? next : region.optString("title")) + "."; }
@@ -1429,7 +1461,17 @@ public final class WorldBotService extends Service {
         JSONObject player = loadPlayer(chatId, world, false);
         long messageId = player.optLong("pageMessageId", 0L);
         String pageMode = player.optString("pageMode", "photo");
-        String desiredImage = imageName == null || imageName.isEmpty() ? MAP_IMAGE : imageName;
+        boolean textOnly = imageName == null || imageName.isEmpty();
+        String desiredImage = textOnly ? "" : imageName;
+        if (messageId > 0 && ((textOnly && !"text".equals(pageMode)) || (!textOnly && "text".equals(pageMode)))) {
+            try {
+                JSONObject delete = new JSONObject(); delete.put("chat_id", chatId); delete.put("message_id", messageId);
+                telegramPost(token, "deleteMessage", delete);
+            } catch (Exception ignored) { }
+            messageId = 0;
+            player.put("pageMessageId", 0); player.put("pageMode", textOnly ? "text" : "photo");
+            savePlayer(chatId, player);
+        }
         if (messageId > 0) {
             JSONObject payload = new JSONObject();
             try {
@@ -1452,7 +1494,7 @@ public final class WorldBotService extends Service {
                 }
             } catch (Exception ignored) { }
         }
-        try {
+        if (!textOnly) try {
             JSONObject payload = new JSONObject(); payload.put("chat_id", chatId);
             payload.put("caption", limit(caption, 1000));
             if (markup != null) payload.put("reply_markup", markup);
