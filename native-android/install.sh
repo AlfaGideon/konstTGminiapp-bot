@@ -6,6 +6,8 @@ ACTIVITY_DIR="$APP_DIR/java/ru/botcraft/studio"
 mkdir -p "$ACTIVITY_DIR"
 cp native-android/MainActivity.java "$ACTIVITY_DIR/MainActivity.java"
 cp native-android/WorldBotService.java "$ACTIVITY_DIR/WorldBotService.java"
+mkdir -p "$APP_DIR/assets/botcraft"
+cp native-android/game-art/*.jpg "$APP_DIR/assets/botcraft/"
 
 python3 - <<'PY'
 from pathlib import Path

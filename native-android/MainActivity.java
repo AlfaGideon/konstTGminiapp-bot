@@ -69,6 +69,7 @@ public class MainActivity extends Activity {
     private static final String BOT_RUNNING_KEY = "telegram_bot_running";
     private static final String BOT_STATUS_KEY = "telegram_bot_status";
     private static final String ACTIVE_WORLD_KEY = "active_world_id";
+    private static final String STARTER_WORLD_ID = "demo-north-archipelago";
     private static final String BOT_TOKEN_KEY_ALIAS = "botcraft-telegram-token-v1";
     private static final int INSTALL_PERMISSION_REQUEST = 411;
     private static final int NOTIFICATION_PERMISSION_REQUEST = 412;
@@ -128,6 +129,7 @@ public class MainActivity extends Activity {
         themeChoice = preferences.getString("theme", "system");
         dark = resolveDarkMode();
         loadProjects();
+        seedStarterCampaign();
         getWindow().setStatusBarColor(colorBg());
         getWindow().setNavigationBarColor(colorSurface());
         getWindow().getDecorView().setSystemUiVisibility(dark ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
@@ -244,6 +246,121 @@ public class MainActivity extends Activity {
         return nav;
     }
 
+    private void seedStarterCampaign() {
+        JSONObject existing = findProject(STARTER_WORLD_ID);
+        if (existing != null && worldNodes(existing).length() > 0) return;
+        JSONObject world = existing == null ? new JSONObject() : existing;
+        try {
+            world.put("id", STARTER_WORLD_ID);
+            world.put("name", "Сердце Полуночного Архипелага");
+            world.put("template", "start");
+            world.put("startNode", "na_intro");
+            world.put("updatedAt", System.currentTimeMillis());
+            JSONArray nodes = new JSONArray();
+
+            JSONObject intro = storyNode("na_intro", "start", "Северный порт Нордхейм",
+                "Полночь длится уже девять дней. За фьордом погас маяк, и ледяной туман ползёт к домам. Картограф Мира обещает найти путь к его сердцу.\n\nВ кармане — 28 серебряных марок. Решай сам, кому доверять.", "01-north-harbor.jpg");
+            addStoryChoice(intro, "Найти картографа Миру", "na_mira", "", "", 0, "", "");
+            addStoryChoice(intro, "Сначала зайти за припасами", "na_market", "", "", 0, "", ""); nodes.put(intro);
+
+            JSONObject mira = storyNode("na_mira", "npc", "Мира и карта ветров",
+                "Мира разворачивает карту, испещрённую серебряными линиями. «Внутри маяка спрятано Полярное Сердце. Его стережёт дракон изо льда. Вернёшь свет — Нордхейм переживёт эту ночь».\n\nОна отмечает на карте старый причал и предупреждает о волках на острове.", "02-cartographer.jpg");
+            addStoryChoice(mira, "Обещать вернуть свет маяку", "na_market", "flag", "quest_lighthouse", 1, "", "");
+            addStoryChoice(mira, "Спросить, что случилось с прежней командой", "na_legend", "", "", 0, "", ""); nodes.put(mira);
+
+            JSONObject legend = storyNode("na_legend", "dialogue", "Последний сигнал",
+                "«Они нашли лунный осколок у затонувшего корабля. Без него зеркало маяка не открыть. Но гарпун тоже может перерезать цепь», — шепчет Мира. За окном гудит пустой колокол.", "");
+            addStoryChoice(legend, "Пора собираться", "na_market", "", "", 0, "", ""); nodes.put(legend);
+
+            JSONObject market = storyNode("na_market", "shop", "Лавка у причала",
+                "Старый Торм продаёт последние вещи перед закрытием гавани. У тебя 28 марок: выбери одну покупку или сохрани деньги.", "");
+            addStoryChoice(market, "Зелье северной мяты · 12 марок", "na_wreck", "buy", "Зелье северной мяты", 12, "", "");
+            addStoryChoice(market, "Сигнальный гарпун · 20 марок", "na_wreck", "buy", "Сигнальный гарпун", 20, "", "");
+            addStoryChoice(market, "Не покупать ничего", "na_wreck", "", "", 0, "", ""); nodes.put(market);
+
+            JSONObject wreck = storyNode("na_wreck", "travel", "Затонувший корабль",
+                "На острове волны выбросили на лёд старое судно. Под треснувшей палубой мерцает голубой осколок. Вдалеке уже слышен вой.", "");
+            addStoryChoice(wreck, "Достать лунный осколок", "na_wolf", "item", "Лунный осколок", 0, "", "");
+            addStoryChoice(wreck, "Оставить осколок и идти прямо на вой", "na_wolf", "", "", 0, "", "");
+            addStoryChoice(wreck, "Проверить рюкзак", "na_inventory", "", "", 0, "", ""); nodes.put(wreck);
+
+            JSONObject inventory = storyNode("na_inventory", "inventory", "Рюкзак путешественника",
+                "Всё найденное остаётся с тобой. Зелье можно выпить во время боя, а осколок или гарпун помогут открыть маяк.", "");
+            inventory.put("next", "na_wolf"); nodes.put(inventory);
+
+            JSONObject wolf = storyNode("na_wolf", "battle", "Ледяной пёс",
+                "Из снежной пелены выскакивает зверь с прозрачными клыками. Он преграждает дорогу к маяку.\n\nУдар наносит 2 урона; зелье лечит 4 здоровья.", "");
+            wolf.put("enemyName", "Ледяной пёс"); wolf.put("enemyHp", 5); wolf.put("enemyAttack", 1);
+            wolf.put("victoryTarget", "na_lighthouse"); wolf.put("defeatTarget", "na_retreat"); wolf.put("fleeTarget", "na_retreat");
+            wolf.put("rewardGold", 10); wolf.put("rewardXp", 15); wolf.put("rewardItem", "Клык ледяного пса"); nodes.put(wolf);
+
+            JSONObject lighthouse = storyNode("na_lighthouse", "quest", "Зеркальный замок",
+                "Дверь маяка скована тремя цепями. На бронзовой плите вырезано: «Луна покажет путь; сталь разбудит бурю».\n\nМожно использовать осколок, гарпун или потерять 2 здоровья, ломая замок.", "");
+            addStoryChoice(lighthouse, "Вставить лунный осколок", "na_bridge", "flag", "mirror_open", 1, "Лунный осколок", "na_bridge");
+            addStoryChoice(lighthouse, "Перерезать цепь гарпуном", "na_bridge", "consume", "Сигнальный гарпун", 0, "Сигнальный гарпун", "");
+            addStoryChoice(lighthouse, "Выломать дверь плечом · −2 здоровья", "na_bridge", "damage", "", 2, "", "na_retreat");
+            addStoryChoice(lighthouse, "Вернуться к Торму за припасами", "na_market", "", "", 0, "", ""); nodes.put(lighthouse);
+
+            JSONObject bridge = storyNode("na_bridge", "dialogue", "Лестница под небом",
+                "Внутри башни линзы вращаются сами собой. Мира шепчет пароль, и на вершине раскрывается штормовое окно. За ним поднимается силуэт — огромный, как сама башня.", "");
+            addStoryChoice(bridge, "Подняться навстречу дракону", "na_wyrm", "", "", 0, "", ""); nodes.put(bridge);
+
+            JSONObject wyrm = storyNode("na_wyrm", "battle", "Вейр, дракон белой бури",
+                "Древний дракон расправляет крылья. В центре груди горит Полярное Сердце. Его удары наносят 2 урона; зелье сработает прямо в бою.\n\nПобеди — и выбери, кому достанется сила сердца.", "03-ice-wyrm.jpg");
+            wyrm.put("enemyName", "Вейр, дракон белой бури"); wyrm.put("enemyHp", 8); wyrm.put("enemyAttack", 2);
+            wyrm.put("victoryTarget", "na_ending"); wyrm.put("defeatTarget", "na_retreat"); wyrm.put("fleeTarget", "na_retreat");
+            wyrm.put("rewardGold", 30); wyrm.put("rewardXp", 50); wyrm.put("rewardItem", "Полярное Сердце"); nodes.put(wyrm);
+
+            JSONObject ending = storyNode("na_ending", "loot", "Судьба Полярного Сердца",
+                "Вейр падает, и буря стихает. Полярное Сердце пульсирует у тебя в руках, а Мира ждёт ответа: вернуть его маяку и спасти гавань — или забрать древнюю силу себе? Трофей дракона уже в рюкзаке.", "01-north-harbor.jpg");
+            addStoryChoice(ending, "Вернуть Сердце маяку", "na_ending_lighthouse", "", "", 0, "", "");
+            addStoryChoice(ending, "Оставить силу себе", "na_ending_power", "", "", 0, "", ""); nodes.put(ending);
+
+            JSONObject endingLighthouse = storyNode("na_ending_lighthouse", "loot", "Хранитель маяка",
+                "Ты помещаешь Сердце в линзу. Над Нордхеймом вспыхивает золотой луч, ледяной туман отступает, а рыбаки зажигают огни в честь спасителя. Мира отдаёт тебе компас: теперь твоя история начинается на рассвете.", "01-north-harbor.jpg");
+            addStoryChoice(endingLighthouse, "Сыграть ещё раз", "na_intro", "reset", "", 0, "", ""); nodes.put(endingLighthouse);
+
+            JSONObject endingPower = storyNode("na_ending_power", "loot", "Повелитель белой бури",
+                "Ты прячешь Полярное Сердце под плащом. Маяк остаётся тёмным, зато ледяная буря расступается перед тобой. Мира уходит в Нордхейм одна; однажды архипелагу придётся решить, был ли ты героем или новой легендой страха.", "03-ice-wyrm.jpg");
+            addStoryChoice(endingPower, "Сыграть ещё раз", "na_intro", "reset", "", 0, "", ""); nodes.put(endingPower);
+
+            JSONObject retreat = storyNode("na_retreat", "dialogue", "Возвращение в Нордхейм",
+                "Ты отступаешь к рыбацким огням. Мира перевязывает раны и говорит: «Маяк подождёт до следующей попытки». Найди припасы и попробуй другой путь.", "01-north-harbor.jpg");
+            addStoryChoice(retreat, "Вернуться к лавке", "na_market", "heal", "", 3, "", "");
+            addStoryChoice(retreat, "Начать историю заново", "na_intro", "reset", "", 0, "", ""); nodes.put(retreat);
+
+            world.put("nodes", nodes);
+            if (existing == null) projects.add(world);
+            saveProjects();
+            if (preferences.getString(ACTIVE_WORLD_KEY, "").isEmpty()) preferences.edit().putString(ACTIVE_WORLD_KEY, STARTER_WORLD_ID).apply();
+        } catch (Exception ignored) { }
+    }
+
+    private JSONObject storyNode(String id, String type, String title, String text, String image) {
+        JSONObject node = createNode(findTemplate(type));
+        try { node.put("id", id); node.put("type", type); node.put("title", title); node.put("text", text); node.put("image", image); }
+        catch (Exception ignored) { }
+        return node;
+    }
+
+    private void addStoryChoice(JSONObject node, String label, String target, String effectType, String item, int amount, String requiresItem, String fallbackTarget) {
+        try {
+            JSONObject choice = new JSONObject();
+            choice.put("label", label); choice.put("target", target);
+            if (!effectType.isEmpty()) {
+                JSONObject effect = new JSONObject(); effect.put("type", effectType);
+                if (!item.isEmpty()) effect.put("item", item);
+                if (amount != 0) effect.put(effectType.equals("buy") ? "cost" : "amount", amount);
+                choice.put("effect", effect);
+            }
+            if (!requiresItem.isEmpty()) choice.put("requiresItem", requiresItem);
+            if (!fallbackTarget.isEmpty()) choice.put("fallbackTarget", fallbackTarget);
+            JSONArray choices = node.optJSONArray("choices");
+            if (choices == null) { choices = new JSONArray(); node.put("choices", choices); }
+            choices.put(choice);
+        } catch (Exception ignored) { }
+    }
+
     private void renderHome() {
         addBrandHeader("Botcraft", "БОТ + MINI APP");
         addSpace(20);
@@ -272,6 +389,18 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams cp = params(-1, 50); cp.topMargin = dp(16); start.addView(create, cp);
         create.setOnClickListener(v -> startNewWorld());
         LinearLayout.LayoutParams slp = params(-1, -2); slp.topMargin = dp(18); page.addView(start, slp);
+
+        LinearLayout campaign = cardColumn();
+        TextView campaignBadge = text("ГОТОВАЯ ИСТОРИЯ · 14 СЦЕН · 2 КОНЦОВКИ", 10, colorPrimary(), true);
+        campaign.addView(campaignBadge);
+        TextView campaignTitle = text("Сердце Полуночного Архипелага", 18, colorText(), true);
+        LinearLayout.LayoutParams campaignTitleLp = params(-1, -2); campaignTitleLp.topMargin = dp(7); campaign.addView(campaignTitle, campaignTitleLp);
+        TextView campaignCopy = text("Проклятый маяк, картограф Мира, лавка припасов, ледяной пёс и бой с драконом. Сцены и решения можно менять в конструкторе.", 12, colorMuted(), false);
+        LinearLayout.LayoutParams campaignCopyLp = params(-1, -2); campaignCopyLp.topMargin = dp(5); campaign.addView(campaignCopy, campaignCopyLp);
+        TextView playCampaign = actionButton("Настроить готовую кампанию", false);
+        LinearLayout.LayoutParams playLp = params(-1, 46); playLp.topMargin = dp(11); campaign.addView(playCampaign, playLp);
+        playCampaign.setOnClickListener(v -> openProjectEditor(STARTER_WORLD_ID));
+        LinearLayout.LayoutParams campaignLp = params(-1, -2); campaignLp.topMargin = dp(14); page.addView(campaign, campaignLp);
 
         addSectionTitle("Базовые блоки", "Начни с входа в мир и персонажей");
         addTemplateCard(TEMPLATES[0], false);
@@ -647,6 +776,11 @@ public class MainActivity extends Activity {
                         ch.put("label", label);
                         JSONObject previous = previousChoices == null ? null : previousChoices.optJSONObject(index);
                         ch.put("target", previous == null ? "" : previous.optString("target", ""));
+                        if (previous != null) {
+                            for (String property : new String[] {"effect", "requiresItem", "fallbackTarget"}) {
+                                if (previous.has(property)) ch.put(property, previous.get(property));
+                            }
+                        }
                         choices.put(ch);
                     }
                 }
