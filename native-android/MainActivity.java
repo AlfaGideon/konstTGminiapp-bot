@@ -3,6 +3,7 @@ package ru.botcraft.studio;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DownloadManager;
+import android.app.Dialog;
 import android.Manifest;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -13,12 +14,15 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Movie;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
@@ -1372,11 +1376,59 @@ public class MainActivity extends Activity {
     }
 
     private void showSkinPreview(String filename,String title,String detail) {
-        LinearLayout body=new LinearLayout(this);body.setOrientation(LinearLayout.VERTICAL);body.setGravity(Gravity.CENTER_HORIZONTAL);body.setPadding(dp(18),dp(8),dp(18),dp(8));
-        ImageView image=new ImageView(this);image.setScaleType(ImageView.ScaleType.FIT_CENTER);Bitmap art=loadSkinArt(filename,dp(260),dp(360));if(art!=null)image.setImageBitmap(art);
-        LinearLayout.LayoutParams ip=params(-1,dp(360));body.addView(image,ip);
-        TextView copy=text(detail+"\n"+filename+"\n\nОблик меняет только внешний вид, не класс и характеристики.",13,colorMuted(),false);LinearLayout.LayoutParams cp=params(-1,-2);cp.topMargin=dp(8);body.addView(copy,cp);
-        new AlertDialog.Builder(this).setTitle(title).setView(body).setPositiveButton("Закрыть",null).show();
+        Dialog dialog=new Dialog(this);dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout panel=new LinearLayout(this);panel.setOrientation(LinearLayout.VERTICAL);panel.setPadding(dp(16),dp(14),dp(16),dp(14));
+        panel.setBackground(round(colorCard(),24,colorLine(),1));
+
+        LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);
+        TextView heading=text(title,19,colorText(),true);LinearLayout.LayoutParams hp=new LinearLayout.LayoutParams(0,-2,1);header.addView(heading,hp);
+        TextView closeTop=actionButton("✕",false);LinearLayout.LayoutParams closeLp=new LinearLayout.LayoutParams(dp(44),dp(42));closeLp.leftMargin=dp(8);header.addView(closeTop,closeLp);
+        panel.addView(header);
+        TextView sub=text(detail+"  ·  "+(filename.toLowerCase(Locale.ROOT).endsWith(".gif")?"GIF · анимация":"ПРЕДПРОСМОТР"),11,colorMuted(),true);
+        LinearLayout.LayoutParams subLp=params(-1,-2);subLp.topMargin=dp(3);panel.addView(sub,subLp);
+
+        FrameLayout viewport=new FrameLayout(this);viewport.setBackground(round(colorSurface(),18,colorLine(),1));
+        viewport.setClipToOutline(true);LinearLayout.LayoutParams vp=new LinearLayout.LayoutParams(-1,0,1);vp.topMargin=dp(14);vp.bottomMargin=dp(12);panel.addView(viewport,vp);
+        boolean gif=filename.toLowerCase(Locale.ROOT).endsWith(".gif");
+        if(gif) {
+            GifPreviewView animation=new GifPreviewView(this,filename);
+            viewport.addView(animation,new FrameLayout.LayoutParams(-1,-1));
+            TextView badge=text("●  GIF",11,Color.WHITE,true);badge.setPadding(dp(10),dp(6),dp(10),dp(6));badge.setBackground(round(dark?"#B936A98F":"#B021796D",999));
+            FrameLayout.LayoutParams badgeLp=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.END);badgeLp.setMargins(0,dp(10),dp(10),0);viewport.addView(badge,badgeLp);
+        } else {
+            ImageView image=new ImageView(this);image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            Bitmap art=loadSkinArt(filename,dp(340),dp(560));if(art!=null)image.setImageBitmap(art);
+            viewport.addView(image,new FrameLayout.LayoutParams(-1,-1));
+        }
+        TextView copy=text("Облик меняет только внешний вид, не класс и характеристики.",12,colorMuted(),false);
+        LinearLayout.LayoutParams cp=params(-1,-2);cp.bottomMargin=dp(10);panel.addView(copy,cp);
+        TextView close=actionButton("Закрыть просмотр",true);panel.addView(close,params(-1,46));
+        dialog.setContentView(panel);dialog.setCancelable(true);
+        closeTop.setOnClickListener(v->dialog.dismiss());close.setOnClickListener(v->dialog.dismiss());
+        Window window=dialog.getWindow();if(window!=null){window.setBackgroundDrawableResource(android.R.color.transparent);window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);WindowManager.LayoutParams attrs=window.getAttributes();attrs.dimAmount=.72f;window.setAttributes(attrs);}
+        dialog.show();
+        if(window!=null){int width=getResources().getDisplayMetrics().widthPixels;int height=getResources().getDisplayMetrics().heightPixels;window.setLayout((int)(width*.92f),(int)(height*.84f));}
+    }
+
+    private final class GifPreviewView extends View {
+        private Movie movie;
+        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
+        private long startedAt;
+        GifPreviewView(Context context,String filename) {
+            super(context);setLayerType(View.LAYER_TYPE_SOFTWARE,null);
+            try(InputStream input=getAssets().open("botcraft/"+filename)){movie=Movie.decodeStream(input);}catch(Exception ignored){movie=null;}
+        }
+        @Override protected void onAttachedToWindow(){super.onAttachedToWindow();startedAt=SystemClock.uptimeMillis();invalidate();}
+        @Override protected void onDraw(android.graphics.Canvas canvas){
+            super.onDraw(canvas);
+            if(movie==null){paint.setColor(colorMuted());paint.setTextSize(dp(14));canvas.drawText("Не удалось загрузить GIF",dp(20),getHeight()/2f,paint);return;}
+            int duration=movie.duration();if(duration<=0)duration=1000;
+            if(startedAt==0)startedAt=SystemClock.uptimeMillis();movie.setTime((int)((SystemClock.uptimeMillis()-startedAt)%duration));
+            float scale=Math.min((float)getWidth()/Math.max(1,movie.width()),(float)getHeight()/Math.max(1,movie.height()));
+            float drawW=movie.width()*scale,drawH=movie.height()*scale;int save=canvas.save();
+            canvas.translate((getWidth()-drawW)/2f,(getHeight()-drawH)/2f);canvas.scale(scale,scale);movie.draw(canvas,0,0);canvas.restoreToCount(save);
+            postInvalidateDelayed(33L);
+        }
     }
 
     private void renderAdminEconomy() {
