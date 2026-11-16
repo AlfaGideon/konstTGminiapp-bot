@@ -35,6 +35,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import java.util.Locale;
+import java.util.Arrays;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -53,6 +54,8 @@ public final class WorldBotService extends Service {
     private static final String PLAYER_STATES_KEY = "telegram_player_states";
     private static final String CAMPAIGN_SKIN_KEY = "campaign_player_skin";
     private static final String MAP_IMAGE = "04-archipelago-map.jpg";
+    private static final String[] MAP_REGION_IDS = {"harbor", "forest", "village", "shipwreck", "mine", "crystal_cave", "wolf_cliffs", "watchtower", "lighthouse", "high_pass", "observatory", "storm_isle", "heart_peak"};
+    private static final int[][] MAP_REGION_CENTERS = {{50,50},{39,38},{46,61},{27,35},{37,74},{23,60},{30,50},{58,61},{68,63},{50,75},{72,39},{82,71},{91,86}};
     private static final String ACTIVE_WORLD_KEY = "active_world_id";
     private static final String RUNNING_KEY = "telegram_bot_running";
     private static final String SERVICE_STATUS_KEY = "telegram_bot_status";
@@ -592,14 +595,12 @@ public final class WorldBotService extends Service {
     }
 
     private String regionForGrid(int x, int y) {
-        String[] ids = {"harbor", "forest", "village", "shipwreck", "mine", "crystal_cave", "wolf_cliffs", "watchtower", "lighthouse", "high_pass", "observatory", "storm_isle", "heart_peak"};
-        int[][] centers = {{50,50},{39,38},{46,61},{27,35},{37,74},{23,60},{30,50},{58,61},{68,63},{50,75},{72,39},{82,71},{91,86}};
         int best = 0; int distance = Integer.MAX_VALUE;
-        for (int i = 0; i < centers.length; i++) {
-            int dx = x - centers[i][0], dy = y - centers[i][1]; int candidate = dx * dx + dy * dy;
+        for (int i = 0; i < MAP_REGION_CENTERS.length; i++) {
+            int dx = x - MAP_REGION_CENTERS[i][0], dy = y - MAP_REGION_CENTERS[i][1]; int candidate = dx * dx + dy * dy;
             if (candidate < distance) { distance = candidate; best = i; }
         }
-        return ids[best];
+        return MAP_REGION_IDS[best];
     }
 
     private String regionSymbol(String id) {
@@ -678,6 +679,7 @@ public final class WorldBotService extends Service {
         canvas.drawColor(Color.rgb(14, 23, 34));
         RectF frame = new RectF(12, 12, size - 12, size - 12);
         paint.setColor(Color.rgb(25, 40, 48)); canvas.drawRoundRect(frame, 30, 30, paint);
+        boolean[][] roads = buildRoadGrid();
         for (int row = 0; row < 7; row++) for (int col = 0; col < 7; col++) {
             int wx = centerX + col - 3, wy = centerY + row - 3;
             float left = margin + col * tile, top = margin + row * tile;
@@ -687,7 +689,7 @@ public final class WorldBotService extends Service {
                 paint.setColor(Color.rgb(38, 62, 74)); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.5f); canvas.drawRoundRect(cell, 9, 9, paint); paint.setStyle(Paint.Style.FILL);
                 continue;
             }
-            drawMapTile(canvas, cell, wx, wy, world, player, paint);
+            drawMapTile(canvas, cell, wx, wy, world, player, paint, roads);
         }
         float centerLeft = margin + 3 * tile, centerTop = margin + 3 * tile;
         JSONObject currentEvent = eventAt(world, centerX, centerY);
@@ -754,28 +756,13 @@ public final class WorldBotService extends Service {
         paint.setStyle(Paint.Style.FILL); paint.setStrokeCap(Paint.Cap.BUTT); paint.setShader(null);
     }
 
-    private void drawMapTile(Canvas canvas, RectF rect, int x, int y, JSONObject world, JSONObject player, Paint paint) {
+    private void drawMapTile(Canvas canvas, RectF rect, int x, int y, JSONObject world, JSONObject player, Paint paint, boolean[][] roads) {
         String region = regionForGrid(x, y);
         paint.setColor(mapGroundColor(region)); canvas.drawRoundRect(rect, 9, 9, paint);
         float left = rect.left, top = rect.top, w = rect.width(), h = rect.height();
-        int seed = Math.abs(x * 92821 + y * 68917 + x * y * 37);
-        paint.setColor(Color.argb(30, 238, 244, 222));
-        for (int i = 0; i < 4; i++) {
-            float sx = left + 8 + ((seed >> (i * 3)) & 55), sy = top + 8 + ((seed >> (i * 4 + 2)) & 55);
-            canvas.drawCircle(sx, sy, 1.6f + (i % 2), paint);
-        }
-        if (isGridCellAccessible(x, y)) {
-            paint.setColor(Color.argb(55, 242, 213, 151)); paint.setStrokeWidth(3); paint.setStrokeCap(Paint.Cap.ROUND);
-            float cx = left + w / 2, cy = top + h / 2;
-            if (((x + y) & 1) == 0 && x < 99 && isGridCellAccessible(x + 1, y)) canvas.drawLine(cx, cy, left + w, cy + 5, paint);
-            if (((x + 2 * y) % 3) != 0 && y < 99 && isGridCellAccessible(x, y + 1)) canvas.drawLine(cx - 4, cy, cx + 5, top + h, paint);
-            paint.setStrokeCap(Paint.Cap.BUTT);
-        } else {
-            paint.setColor(Color.rgb(48, 65, 77)); canvas.drawRoundRect(new RectF(left + 4, top + 4, left + w - 4, top + h - 4), 10, 10, paint);
-            paint.setColor(Color.rgb(103, 117, 122));
-            canvas.drawCircle(left + 28, top + 34, 15, paint); canvas.drawCircle(left + 48, top + 29, 19, paint); canvas.drawCircle(left + 55, top + 49, 13, paint);
-            paint.setColor(Color.rgb(138, 148, 146)); canvas.drawCircle(left + 43, top + 31, 10, paint); canvas.drawCircle(left + 24, top + 37, 8, paint);
-        }
+        drawTerrainDetails(canvas, rect, x, y, region, roads, paint);
+        if (roads[y][x]) drawRoad(canvas, rect, x, y, roads, region, paint);
+        drawLandmark(canvas, rect, x, y, region, paint);
         JSONObject event = eventAt(world, x, y);
         if (event != null && !contains(player.optJSONArray("resolvedGridEvents"), event.optString("id", ""))) {
             drawPoiMarker(canvas, rect.centerX(), rect.centerY(), event.optString("kind", "mystery"), paint);
@@ -785,6 +772,230 @@ public final class WorldBotService extends Service {
         }
         paint.setColor(Color.argb(45, 17, 27, 29)); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.2f);
         canvas.drawRoundRect(rect, 9, 9, paint); paint.setStyle(Paint.Style.FILL);
+    }
+
+    private boolean[][] buildRoadGrid() {
+        boolean[][] roads = new boolean[100][100];
+        int[][] links = {{0,1},{0,2},{1,3},{1,6},{2,4},{4,5},{6,7},{7,8},{7,9},{8,10},{9,11},{11,12}};
+        int[] previous = new int[10000], queue = new int[10000];
+        for (int[] link : links) {
+            int[] start = MAP_REGION_CENTERS[link[0]], goal = MAP_REGION_CENTERS[link[1]];
+            int startIndex = start[1] * 100 + start[0], goalIndex = goal[1] * 100 + goal[0];
+            Arrays.fill(previous, -1);
+            int head = 0, tail = 0; queue[tail++] = startIndex; previous[startIndex] = startIndex;
+            int[] dx = {0, 1, 0, -1}, dy = {-1, 0, 1, 0};
+            while (head < tail && previous[goalIndex] == -1) {
+                int current = queue[head++], x = current % 100, y = current / 100;
+                for (int direction = 0; direction < 4; direction++) {
+                    int nx = x + dx[direction], ny = y + dy[direction];
+                    if (!isGridCellAccessible(nx, ny)) continue;
+                    int next = ny * 100 + nx;
+                    if (previous[next] != -1) continue;
+                    previous[next] = current; queue[tail++] = next;
+                    if (next == goalIndex) break;
+                }
+            }
+            if (previous[goalIndex] != -1) {
+                int step = goalIndex;
+                while (step != startIndex) { roads[step / 100][step % 100] = true; step = previous[step]; }
+                roads[start[1]][start[0]] = true;
+            }
+        }
+        return roads;
+    }
+
+    private void drawTerrainDetails(Canvas canvas, RectF rect, int x, int y, String region, boolean[][] roads, Paint paint) {
+        float l = rect.left, t = rect.top, c = rect.centerX(), b = rect.bottom;
+        int seed = Math.abs(x * 92821 + y * 68917 + x * y * 37);
+        boolean road = roads[y][x];
+        paint.setShader(null); paint.setStyle(Paint.Style.FILL);
+        switch (region) {
+            case "forest":
+            case "wolf_cliffs":
+            case "village":
+            case "watchtower":
+            case "harbor":
+                drawGrass(canvas, rect, seed, region, paint);
+                if ("forest".equals(region) || "wolf_cliffs".equals(region)) {
+                    int count = 1 + ((seed >>> 5) & 1);
+                    for (int i = 0; i < count; i++) {
+                        float tx = l + 17 + ((seed >>> (i * 4 + 1)) & 43);
+                        float ty = t + 17 + ((seed >>> (i * 5 + 7)) & 42);
+                        if (!road || Math.abs(tx - c) > 22 || Math.abs(ty - rect.centerY()) > 22)
+                            drawTree(canvas, tx, ty, "forest".equals(region) ? 0.88f : 0.7f, seed + i * 17, paint);
+                    }
+                }
+                if ("harbor".equals(region)) drawSandRipples(canvas, rect, seed, paint);
+                break;
+            case "shipwreck":
+            case "storm_isle":
+            case "lighthouse":
+                paint.setColor(Color.argb(65, 176, 225, 220)); paint.setStrokeWidth(2.1f); paint.setStrokeCap(Paint.Cap.ROUND);
+                for (int i = 0; i < 3; i++) {
+                    float yy = t + 17 + i * 22 + ((seed >>> (i * 2)) & 7);
+                    float xx = l + 7 + ((seed >>> (i * 3 + 2)) & 16);
+                    canvas.drawLine(xx, yy, Math.min(rect.right - 7, xx + 22 + (i * 4)), yy + ((i & 1) == 0 ? 3 : -2), paint);
+                }
+                paint.setStrokeCap(Paint.Cap.BUTT);
+                if ("shipwreck".equals(region) && (seed & 3) == 0) drawBoulder(canvas, l + 17 + (seed & 35), t + 22 + ((seed >> 4) & 30), 0.65f, paint);
+                if ("lighthouse".equals(region)) drawCoastGrass(canvas, rect, seed, paint);
+                break;
+            case "mine":
+            case "high_pass":
+            case "heart_peak":
+                drawRockField(canvas, rect, seed, region, paint);
+                break;
+            case "crystal_cave":
+                drawCrystalForm(canvas, l + 16 + (seed & 35), t + 24 + ((seed >> 4) & 23), 0.75f + ((seed >> 8) & 3) * 0.1f, paint);
+                if ((seed & 1) == 0) drawCrystalForm(canvas, l + 45, t + 51, 0.55f, paint);
+                break;
+            case "observatory":
+                drawGrass(canvas, rect, seed, region, paint);
+                if ((seed & 1) == 0) drawTree(canvas, l + 18 + (seed & 35), t + 42, 0.7f, seed, paint);
+                break;
+        }
+        if ((seed & 7) == 0 && !road && !"shipwreck".equals(region) && !"storm_isle".equals(region)) {
+            paint.setColor(Color.argb(115, 228, 220, 190));
+            canvas.drawCircle(l + 12 + ((seed >>> 6) & 50), t + 12 + ((seed >>> 10) & 50), 1.8f, paint);
+        }
+    }
+
+    private void drawGrass(Canvas canvas, RectF rect, int seed, String region, Paint paint) {
+        float l = rect.left, t = rect.top;
+        int blades = "forest".equals(region) ? 5 : 7;
+        for (int i = 0; i < blades; i++) {
+            float x = l + 7 + ((seed >>> ((i * 3) & 15)) & 59);
+            float y = t + 11 + ((seed >>> ((i * 4 + 3) & 15)) & 55);
+            if (Math.abs(x - rect.centerX()) < 15 && Math.abs(y - rect.centerY()) < 18) continue;
+            int color = "forest".equals(region) ? Color.argb(170, 135, 189, 105) : "harbor".equals(region) ? Color.argb(150, 117, 151, 82) : Color.argb(155, 177, 192, 120);
+            paint.setColor(color); paint.setStrokeWidth(1.6f); paint.setStrokeCap(Paint.Cap.ROUND); paint.setStyle(Paint.Style.STROKE);
+            canvas.drawLine(x, y + 4, x - 2.2f, y - 2, paint); canvas.drawLine(x, y + 4, x + 2.5f, y - 1.5f, paint);
+            if ((i & 2) == 0) { paint.setColor(Color.argb(180, 245, 220, 147)); paint.setStyle(Paint.Style.FILL); canvas.drawCircle(x + 4, y + 1, 1.7f, paint); }
+        }
+        paint.setStyle(Paint.Style.FILL); paint.setStrokeCap(Paint.Cap.BUTT);
+    }
+
+    private void drawTree(Canvas canvas, float x, float y, float scale, int seed, Paint paint) {
+        float r = 12 * scale;
+        paint.setColor(Color.argb(80, 12, 23, 20)); canvas.drawOval(new RectF(x-r, y+r*.35f, x+r, y+r*.85f), paint);
+        paint.setColor(Color.rgb(92, 62, 38)); canvas.drawRoundRect(new RectF(x-2.5f*scale, y, x+2.5f*scale, y+r*.8f), 2, 2, paint);
+        int shade = (seed & 1) == 0 ? 0 : 1;
+        paint.setColor(shade == 0 ? Color.rgb(28, 75, 47) : Color.rgb(41, 91, 52));
+        canvas.drawCircle(x, y-r*.2f, r*.82f, paint);
+        canvas.drawCircle(x-r*.47f, y+r*.03f, r*.55f, paint); canvas.drawCircle(x+r*.45f, y+r*.02f, r*.56f, paint);
+        paint.setColor(Color.argb(115, 142, 181, 101)); canvas.drawCircle(x-r*.25f, y-r*.42f, r*.26f, paint);
+        paint.setColor(Color.argb(65, 21, 43, 31)); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.2f);
+        canvas.drawCircle(x, y-r*.2f, r*.82f, paint); paint.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawSandRipples(Canvas canvas, RectF rect, int seed, Paint paint) {
+        paint.setColor(Color.argb(80, 245, 222, 160)); paint.setStrokeWidth(1.6f); paint.setStyle(Paint.Style.STROKE);
+        for (int i = 0; i < 3; i++) {
+            float x = rect.left + 13 + ((seed >>> (i * 4)) & 40), y = rect.top + 18 + ((seed >>> (i * 5 + 2)) & 40);
+            canvas.drawArc(new RectF(x-8,y-3,x+9,y+5), 195, 145, false, paint);
+        }
+        paint.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawCoastGrass(Canvas canvas, RectF rect, int seed, Paint paint) {
+        paint.setColor(Color.argb(180, 112, 151, 94)); paint.setStrokeWidth(2); paint.setStrokeCap(Paint.Cap.ROUND); paint.setStyle(Paint.Style.STROKE);
+        float x = rect.left + 14 + (seed & 37), y = rect.bottom - 13;
+        for (int i=0;i<3;i++) canvas.drawLine(x+i*3,y,x-3+i*4,y-9-(i&1)*3,paint);
+        paint.setStyle(Paint.Style.FILL); paint.setStrokeCap(Paint.Cap.BUTT);
+    }
+
+    private void drawRockField(Canvas canvas, RectF rect, int seed, String region, Paint paint) {
+        int rocks = "heart_peak".equals(region) ? 3 : 2;
+        for (int i = 0; i < rocks; i++) {
+            float x = rect.left + 12 + ((seed >>> (i * 5 + 1)) & 50), y = rect.top + 17 + ((seed >>> (i * 4 + 6)) & 48);
+            if (Math.abs(x - rect.centerX()) < 16 && Math.abs(y - rect.centerY()) < 18) continue;
+            drawBoulder(canvas, x, y, 0.55f + ((seed >>> (i * 3 + 9)) & 3) * 0.12f, paint);
+        }
+        if ("high_pass".equals(region) || "heart_peak".equals(region)) {
+            paint.setColor(Color.argb(170, 209, 226, 225));
+            Path snow = new Path(); snow.moveTo(rect.left+12,rect.top+14); snow.lineTo(rect.left+19,rect.top+5); snow.lineTo(rect.left+26,rect.top+15); snow.close(); canvas.drawPath(snow,paint);
+        }
+        if ("mine".equals(region) && (seed & 1)==0) {
+            paint.setColor(Color.rgb(241,186,80)); canvas.drawCircle(rect.left+rect.width()*.72f,rect.top+rect.height()*.68f,2.4f,paint);
+            paint.setColor(Color.argb(180,248,215,140)); canvas.drawCircle(rect.left+rect.width()*.72f,rect.top+rect.height()*.68f,1.1f,paint);
+        }
+    }
+
+    private void drawBoulder(Canvas canvas, float x, float y, float scale, Paint paint) {
+        paint.setColor(Color.argb(105, 24, 31, 36)); canvas.drawOval(new RectF(x-11*scale,y+5*scale,x+12*scale,y+10*scale),paint);
+        Path rock=new Path(); rock.moveTo(x-10*scale,y+5*scale);rock.lineTo(x-7*scale,y-5*scale);rock.lineTo(x-1*scale,y-10*scale);rock.lineTo(x+7*scale,y-7*scale);rock.lineTo(x+11*scale,y+5*scale);rock.close();
+        paint.setColor(Color.rgb(113,119,112));canvas.drawPath(rock,paint);
+        paint.setColor(Color.argb(160,182,188,171));Path glint=new Path();glint.moveTo(x-7*scale,y-4*scale);glint.lineTo(x-1*scale,y-9*scale);glint.lineTo(x+1*scale,y-2*scale);glint.close();canvas.drawPath(glint,paint);
+    }
+
+    private void drawCrystalForm(Canvas canvas, float x, float y, float scale, Paint paint) {
+        Path crystal=new Path();crystal.moveTo(x-6*scale,y+11*scale);crystal.lineTo(x-4*scale,y-8*scale);crystal.lineTo(x,y-16*scale);crystal.lineTo(x+5*scale,y-7*scale);crystal.lineTo(x+7*scale,y+11*scale);crystal.close();
+        paint.setColor(Color.rgb(83,186,220));canvas.drawPath(crystal,paint);
+        paint.setColor(Color.argb(190,183,240,255));Path facet=new Path();facet.moveTo(x-4*scale,y-8*scale);facet.lineTo(x,y-16*scale);facet.lineTo(x+1*scale,y+8*scale);facet.close();canvas.drawPath(facet,paint);
+        paint.setColor(Color.argb(110,221,255,255));paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);canvas.drawPath(crystal,paint);paint.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawRoad(Canvas canvas, RectF rect, int x, int y, boolean[][] roads, String region, Paint paint) {
+        float cx=rect.centerX(),cy=rect.centerY();
+        paint.setStrokeCap(Paint.Cap.ROUND);paint.setStyle(Paint.Style.STROKE);
+        for(int direction=0;direction<4;direction++) {
+            int nx=x+(direction==1?1:direction==3?-1:0),ny=y+(direction==2?1:direction==0?-1:0);
+            if(nx<0||nx>=100||ny<0||ny>=100||!roads[ny][nx])continue;
+            float ex=cx,ey=cy;
+            if(direction==0)ey=rect.top;else if(direction==1)ex=rect.right;else if(direction==2)ey=rect.bottom;else ex=rect.left;
+            paint.setColor(Color.argb(180,76,55,37));paint.setStrokeWidth(15);canvas.drawLine(cx,cy,ex,ey,paint);
+            paint.setColor(Color.rgb(177,139,87));paint.setStrokeWidth(10);canvas.drawLine(cx,cy,ex,ey,paint);
+            paint.setColor(Color.argb(170,218,185,126));paint.setStrokeWidth(2);canvas.drawLine(cx,cy,ex,ey,paint);
+        }
+        paint.setStyle(Paint.Style.FILL);paint.setStrokeCap(Paint.Cap.BUTT);
+    }
+
+    private void drawLandmark(Canvas canvas, RectF rect, int x, int y, String region, Paint paint) {
+        int index=-1;for(int i=0;i<MAP_REGION_CENTERS.length;i++)if(MAP_REGION_CENTERS[i][0]==x&&MAP_REGION_CENTERS[i][1]==y){index=i;break;}
+        if(index<0)return;
+        float cx=rect.left+rect.width()*.68f, cy=rect.top+rect.height()*.37f;
+        paint.setColor(Color.argb(95,13,20,22));canvas.drawOval(new RectF(cx-21,cy+16,cx+21,cy+23),paint);
+        if("forest".equals(region)||"village".equals(region)||"harbor".equals(region)||"wolf_cliffs".equals(region)||"high_pass".equals(region)) {
+            drawHouse(canvas,cx,cy,region,paint);
+        } else if("shipwreck".equals(region)) {
+            paint.setColor(Color.rgb(79,52,38));paint.setStrokeWidth(4);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStyle(Paint.Style.STROKE);
+            canvas.drawLine(cx-15,cy+12,cx+14,cy+9,paint);canvas.drawLine(cx-5,cy+9,cx-2,cy-15,paint);canvas.drawLine(cx-2,cy-12,cx+10,cy-1,paint);
+            paint.setColor(Color.rgb(172,137,80));canvas.drawLine(cx-2,cy-9,cx+8,cy-2,paint);paint.setStyle(Paint.Style.FILL);paint.setStrokeCap(Paint.Cap.BUTT);
+        } else if("mine".equals(region)||"crystal_cave".equals(region)) {
+            paint.setColor(Color.rgb(53,59,61));Path cave=new Path();cave.moveTo(cx-18,cy+15);cave.lineTo(cx-13,cy-3);cave.lineTo(cx-5,cy-13);cave.lineTo(cx+5,cy-11);cave.lineTo(cx+15,cy+1);cave.lineTo(cx+19,cy+15);cave.close();canvas.drawPath(cave,paint);
+            paint.setColor(Color.rgb(18,27,32));canvas.drawOval(new RectF(cx-9,cy+3,cx+10,cy+18),paint);
+            if("crystal_cave".equals(region))drawCrystalForm(canvas,cx+13,cy+7,.48f,paint);
+        } else if("lighthouse".equals(region)) {
+            paint.setColor(Color.rgb(234,225,192));canvas.drawRoundRect(new RectF(cx-8,cy-14,cx+8,cy+17),3,3,paint);
+            paint.setColor(Color.rgb(167,72,55));canvas.drawRect(cx-8,cy-5,cx+8,cy,paint);
+            paint.setColor(Color.rgb(92,55,39));Path roof=new Path();roof.moveTo(cx-10,cy-14);roof.lineTo(cx,cy-22);roof.lineTo(cx+10,cy-14);roof.close();canvas.drawPath(roof,paint);
+            paint.setColor(Color.rgb(255,235,159));canvas.drawCircle(cx,cy-17,3,paint);
+        } else if("watchtower".equals(region)||"storm_isle".equals(region)) {
+            paint.setColor("watchtower".equals(region)?Color.rgb(157,133,93):Color.rgb(104,108,114));
+            canvas.drawRoundRect(new RectF(cx-10,cy-17,cx+10,cy+18),2,2,paint);
+            paint.setColor(Color.rgb(77,67,54));canvas.drawRect(cx-3,cy+7,cx+3,cy+18,paint);
+            paint.setColor(Color.rgb(191,84,62));Path roof=new Path();roof.moveTo(cx-13,cy-16);roof.lineTo(cx,cy-26);roof.lineTo(cx+13,cy-16);roof.close();canvas.drawPath(roof,paint);
+            paint.setColor(Color.rgb(247,218,142));canvas.drawRect(cx-5,cy-10,cx-1,cy-5,paint);canvas.drawRect(cx+2,cy-10,cx+6,cy-5,paint);
+        } else if("observatory".equals(region)) {
+            paint.setColor(Color.rgb(190,178,130));canvas.drawRoundRect(new RectF(cx-16,cy-3,cx+16,cy+16),6,6,paint);
+            paint.setColor(Color.rgb(82,91,117));canvas.drawArc(new RectF(cx-15,cy-19,cx+15,cy+8),180,180,true,paint);
+            paint.setColor(Color.rgb(228,219,182));canvas.drawRect(cx-2,cy-18,cx+2,cy-4,paint);
+            paint.setColor(Color.rgb(111,183,211));canvas.drawCircle(cx,cy-16,2.8f,paint);
+        } else if("heart_peak".equals(region)) {
+            paint.setColor(Color.rgb(121,70,65));Path peak=new Path();peak.moveTo(cx-19,cy+17);peak.lineTo(cx-10,cy-10);peak.lineTo(cx-2,cy-2);peak.lineTo(cx+5,cy-24);peak.lineTo(cx+17,cy+17);peak.close();canvas.drawPath(peak,paint);
+            paint.setColor(Color.rgb(236,230,206));Path cap=new Path();cap.moveTo(cx-1,cy-11);cap.lineTo(cx+5,cy-24);cap.lineTo(cx+11,cy-5);cap.lineTo(cx+5,cy-9);cap.close();canvas.drawPath(cap,paint);
+        }
+    }
+
+    private void drawHouse(Canvas canvas,float cx,float cy,String region,Paint paint) {
+        int wall="harbor".equals(region)?Color.rgb(226,207,159):"high_pass".equals(region)?Color.rgb(176,195,193):Color.rgb(190,157,105);
+        int roof="wolf_cliffs".equals(region)?Color.rgb(92,62,45):Color.rgb(141,72,49);
+        paint.setColor(wall);canvas.drawRoundRect(new RectF(cx-13,cy-3,cx+13,cy+16),2,2,paint);
+        Path roofShape=new Path();roofShape.moveTo(cx-17,cy-2);roofShape.lineTo(cx,cy-17);roofShape.lineTo(cx+17,cy-2);roofShape.close();paint.setColor(roof);canvas.drawPath(roofShape,paint);
+        paint.setColor(Color.rgb(91,57,39));canvas.drawRoundRect(new RectF(cx-4,cy+6,cx+4,cy+16),2,2,paint);
+        paint.setColor(Color.rgb(123,190,203));canvas.drawRect(cx-10,cy+1,cx-6,cy+6,paint);canvas.drawRect(cx+6,cy+1,cx+10,cy+6,paint);
+        paint.setColor(Color.argb(170,255,228,164));paint.setStrokeWidth(1.2f);canvas.drawLine(cx-10,cy+3.5f,cx-6,cy+3.5f,paint);canvas.drawLine(cx-8,cy+1,cx-8,cy+6,paint);
+        if("harbor".equals(region)){paint.setColor(Color.rgb(110,75,45));canvas.drawRect(cx-16,cy+16,cx+16,cy+19,paint);}
     }
 
     private int mapGroundColor(String region) {
