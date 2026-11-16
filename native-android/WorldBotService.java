@@ -202,6 +202,7 @@ public final class WorldBotService extends Service {
             long chatId = chat.optLong("id");
             JSONObject successfulPayment = message.optJSONObject("successful_payment");
             if (successfulPayment != null) { handleSkinSuccessfulPayment(token, chatId, successfulPayment); return; }
+            rememberPlayerIdentity(chatId, message.optJSONObject("from"));
             String text = message.optString("text", "").trim();
             if (text.startsWith("/start")) {
                 JSONObject world = activeWorld();
@@ -305,13 +306,25 @@ public final class WorldBotService extends Service {
         } catch (Exception ignored) { return newPlayer(worldId); }
     }
 
+    private void rememberPlayerIdentity(long chatId, JSONObject from) {
+        if (from == null) return;
+        JSONObject player = loadPlayer(chatId, activeWorld(), false);
+        try {
+            String firstName = from.optString("first_name", "").trim();
+            String username = from.optString("username", "").trim();
+            if (!firstName.isEmpty()) player.put("firstName", firstName);
+            if (!username.isEmpty()) player.put("username", "@" + username);
+            savePlayer(chatId, player);
+        } catch (Exception ignored) { }
+    }
+
     private JSONObject newPlayer(String worldId) {
         JSONObject player = new JSONObject();
         try {
             String defaultSkin = defaultSkinId(prefs().getString(CAMPAIGN_SKIN_KEY, "archer_trail_f"));
             player.put("worldId", worldId); player.put("characterClass", "archer"); player.put("appearanceGender", skinGender(defaultSkin));
             player.put("hp", 16); player.put("maxHp", 16);
-            player.put("gold", 45); player.put("xp", 0); player.put("level", 1); player.put("inventory", new JSONArray());
+            player.put("gold", 45); player.put("silver", 0); player.put("bronze", 0); player.put("xp", 0); player.put("level", 1); player.put("inventory", new JSONArray());
             player.put("gear", new JSONArray()); player.put("equipment", new JSONObject());
             JSONArray skins = new JSONArray(); addBaseArcherSkins(skins); player.put("skins", skins); player.put("skin", defaultSkin);
             player.put("processedSkinPayments", new JSONArray());
@@ -322,6 +335,7 @@ public final class WorldBotService extends Service {
             player.put("flags", new JSONObject()); player.put("visited", new JSONArray());
             player.put("clearedBattles", new JSONArray()); player.put("currentNode", ""); player.put("pageMessageId", 0);
         } catch (Exception ignored) { }
+        normalizeWallet(player);
         addItem(player, "Зелье северной мяты");
         return player;
     }
@@ -355,11 +369,29 @@ public final class WorldBotService extends Service {
             if (!player.has("pageMessageId")) player.put("pageMessageId", 0);
             if (!player.has("maxHp")) player.put("maxHp", 12);
             if (!player.has("hp")) player.put("hp", player.optInt("maxHp", 12));
+            if (!player.has("silver")) player.put("silver", 0);
+            if (!player.has("bronze")) player.put("bronze", 0);
+            normalizeWallet(player);
         } catch (Exception ignored) { }
+    }
+
+    private void normalizeWallet(JSONObject player) {
+        if (player == null) return;
+        long total = Math.max(0L, (long) player.optInt("gold", 0) * 100L + (long) player.optInt("silver", 0) * 10L + player.optInt("bronze", 0));
+        long maximum = (long) Integer.MAX_VALUE * 100L + 99L;
+        total = Math.min(total, maximum);
+        try { player.put("gold", (int) (total / 100L)); player.put("silver", (int) ((total % 100L) / 10L)); player.put("bronze", (int) (total % 10L)); }
+        catch (Exception ignored) { }
+    }
+
+    private String walletSummary(JSONObject player) {
+        normalizeWallet(player);
+        return "🪙 " + player.optInt("gold") + " · 🥈 " + player.optInt("silver") + " · 🟤 " + player.optInt("bronze");
     }
 
     private void savePlayer(long chatId, JSONObject player) {
         try {
+            normalizeWallet(player);
             JSONObject players = new JSONObject(prefs().getString(PLAYER_STATES_KEY, "{}"));
             players.put(Long.toString(chatId), player);
             prefs().edit().putString(PLAYER_STATES_KEY, players.toString()).apply();
@@ -639,7 +671,7 @@ public final class WorldBotService extends Service {
         StringBuilder text = new StringBuilder("МИРОВАЯ КАРТА 100 × 100 · ");
         text.append(region == null ? regionId : region.optString("title"));
         text.append(" · (").append(x).append(", ").append(y).append(") · ❤️ ").append(player.optInt("hp", 12)).append("/").append(player.optInt("maxHp", 12));
-        text.append(" · 🪙 ").append(player.optInt("gold", 0));
+        text.append(" · ").append(walletSummary(player));
         if (newRegion) text.append(" · новая область");
         if (!skinUnlockNotice.isEmpty()) text.append(" · сюжетный облик открыт");
         JSONObject here = eventAt(world, x, y);
@@ -1430,7 +1462,7 @@ public final class WorldBotService extends Service {
         String text = "ПЕРСОНАЖ · ЛУЧНИК\nОблик: " + skin + "\n\nУровень " + player.optInt("level", 1) + " · опыт " + player.optInt("xp", 0) + "/" + nextLevel
             + "\n❤️ Здоровье: " + player.optInt("hp", 12) + "/" + player.optInt("maxHp", 12)
             + "\n⚔️ Атака: " + playerAttack(player) + " · 🛡 защита: " + playerDefense(player)
-            + "\n🪙 Монеты: " + player.optInt("gold")
+            + "\nКошелёк: " + walletSummary(player) + "\nКурс: 10 бронзы = 1 серебро · 10 серебра = 1 золото"
             + "\n\nНадето:\nОружие — " + gearName(equipment == null ? "" : equipment.optString("weapon", ""))
             + "\nОдежда — " + gearName(equipment == null ? "" : equipment.optString("armor", ""))
             + "\nАксессуар — " + gearName(equipment == null ? "" : equipment.optString("charm", ""))
@@ -1867,7 +1899,7 @@ public final class WorldBotService extends Service {
     private String playerSummary(JSONObject player) {
         if (player == null) return "";
         int level = player.optInt("level", 1);
-        return "❤️ " + player.optInt("hp", 12) + "/" + player.optInt("maxHp", 12) + "   ·   🪙 " + player.optInt("gold")
+        return "❤️ " + player.optInt("hp", 12) + "/" + player.optInt("maxHp", 12) + "   ·   " + walletSummary(player)
             + "   ·   ✨ ур. " + level + " · " + player.optInt("xp") + "/" + (level * 70)
             + "\n" + skinName(player.optString("skin", "wanderer")) + "   ·   ⚔️ " + playerAttack(player) + "   ·   🛡 " + playerDefense(player)
             + "\n🎒 " + inventoryText(player);

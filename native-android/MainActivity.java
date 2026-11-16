@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -1224,9 +1225,10 @@ public class MainActivity extends Activity {
 
     private void addAdminMenuCard(String emoji, String title, String description, Runnable onClick) {
         LinearLayout card=cardColumn(); LinearLayout.LayoutParams cp=params(-1,-2); cp.topMargin=dp(9); page.addView(card,cp);
-        TextView heading=text(emoji+"   "+title+"     ›",17,colorText(),true); card.addView(heading);
+        TextView heading=text(emoji+"   "+title,17,colorText(),true); card.addView(heading);
         TextView detail=text(description,12,colorMuted(),false); LinearLayout.LayoutParams dp1=params(-1,-2); dp1.topMargin=dp(4); card.addView(detail,dp1);
-        card.setOnClickListener(v -> onClick.run()); card.setFocusable(true);
+        TextView open=actionButton("Открыть раздел  ›",false); LinearLayout.LayoutParams op=params(-1,40); op.topMargin=dp(9); card.addView(open,op);
+        card.setOnClickListener(v -> onClick.run()); open.setOnClickListener(v -> onClick.run()); card.setFocusable(true);
     }
 
     private void adminBack(String title, String subtitle) {
@@ -1255,14 +1257,75 @@ public class MainActivity extends Activity {
         while(ids.hasNext()) {
             String id=ids.next(); JSONObject player=all.optJSONObject(id); if(player==null) continue;
             LinearLayout card=cardColumn(); LinearLayout.LayoutParams cp=params(-1,-2); cp.topMargin=dp(8); page.addView(card,cp);
-            card.addView(text(player.optString("firstName", "Игрок")+" · Telegram ID "+id,14,colorText(),true));
-            card.addView(text("Уровень "+player.optInt("level",1)+" · ❤️ "+player.optInt("hp",0)+" · 🪙 "+player.optInt("gold",0)+" · "+player.optString("currentRegion","—"),12,colorMuted(),false));
-            TextView reset=actionButton("Сбросить прогресс игрока",false); LinearLayout.LayoutParams rp=params(-1,42); rp.topMargin=dp(8); card.addView(reset,rp);
+            card.addView(text(player.optString("firstName", player.optString("username", "Игрок"))+" · Telegram ID "+id,14,colorText(),true));
+            card.addView(text("Уровень "+player.optInt("level",1)+" · ❤️ "+player.optInt("hp",0)+" · "+adminWalletLabel(player)+" · "+player.optString("currentRegion","—"),12,colorMuted(),false));
+            TextView manage=actionButton("Управлять персонажем · уровень и валюта",true); LinearLayout.LayoutParams mp=params(-1,44); mp.topMargin=dp(8); card.addView(manage,mp);
+            manage.setOnClickListener(v -> showAdminPlayerDialog(id));
+            TextView reset=actionButton("Сбросить прогресс игрока",false); LinearLayout.LayoutParams rp=params(-1,42); rp.topMargin=dp(6); card.addView(reset,rp);
             reset.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Сбросить прогресс?").setMessage("Данные игрока "+id+" будут удалены с этого устройства.").setNegativeButton("Отмена",null).setPositiveButton("Сбросить",(d,w)->{ JSONObject latest=readPlayerStates(); latest.remove(id); writePlayerStates(latest); render(); }).show());
         }
         if(count>0) { TextView clear=actionButton("Удалить сохранения всех игроков",false); LinearLayout.LayoutParams cp=params(-1,46); cp.topMargin=dp(12); page.addView(clear,cp);
             clear.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Удалить все сохранения?").setMessage("Это действие удалит локальный прогресс всех игроков на этом телефоне.").setNegativeButton("Отмена",null).setPositiveButton("Удалить",(d,w)->{writePlayerStates(new JSONObject());render();}).show()); }
-        TextView warning=text("Для общей админки с удалённым списком игроков, банами и синхронизацией потребуется серверная база и проверка прав администратора. APK не может управлять данными на чужих устройствах.",12,colorMuted(),false); LinearLayout.LayoutParams wp=params(-1,-2); wp.topMargin=dp(14); page.addView(warning,wp);
+        TextView warning=text("Здесь можно менять уровень и баланс игроков, чьи сохранения есть на этом устройстве. Для управления игроками на чужих устройствах понадобится серверная база и проверка прав администратора.",12,colorMuted(),false); LinearLayout.LayoutParams wp=params(-1,-2); wp.topMargin=dp(14); page.addView(warning,wp);
+    }
+
+    private String adminWalletLabel(JSONObject player) {
+        normalizeAdminWallet(player);
+        return "🪙 "+player.optInt("gold")+" · 🥈 "+player.optInt("silver")+" · 🟤 "+player.optInt("bronze");
+    }
+
+    private void showAdminPlayerDialog(String playerId) {
+        JSONObject player=readPlayerStates().optJSONObject(playerId); if(player==null)return;
+        LinearLayout form=new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(20),dp(8),dp(20),dp(4));
+        TextView current=text("Сейчас: уровень "+player.optInt("level",1)+" · "+adminWalletLabel(player),13,colorMuted(),false); form.addView(current);
+        EditText levels=adminDeltaField("Изменение уровня", "0"); form.addView(levels);
+        EditText experience=adminDeltaField("Добавить / убрать опыт", "0"); form.addView(experience);
+        addFormCaption(form,"Баланс: можно ввести отрицательное число для снятия валюты");
+        EditText gold=adminDeltaField("Золото Δ", "0"); form.addView(gold);
+        EditText silver=adminDeltaField("Серебро Δ", "0"); form.addView(silver);
+        EditText bronze=adminDeltaField("Бронза Δ", "0"); form.addView(bronze);
+        ScrollView scroll=new ScrollView(this);scroll.addView(form);
+        new AlertDialog.Builder(this).setTitle("Персонаж · "+playerId).setView(scroll)
+            .setNegativeButton("Отмена",null)
+            .setNeutralButton("Добавить уровень +1",(d,w)->{JSONObject latest=readPlayerStates().optJSONObject(playerId);if(latest!=null){applyAdminLevelDelta(latest,1);saveAdminPlayer(playerId,latest);}})
+            .setPositiveButton("Применить изменения",(d,w)->{
+                JSONObject latest=readPlayerStates().optJSONObject(playerId);if(latest==null)return;
+                applyAdminLevelDelta(latest,parseAdminDelta(levels)); applyAdminExperience(latest,parseAdminDelta(experience));
+                addAdminWallet(latest,"gold",parseAdminDelta(gold));addAdminWallet(latest,"silver",parseAdminDelta(silver));addAdminWallet(latest,"bronze",parseAdminDelta(bronze));
+                saveAdminPlayer(playerId,latest);
+            }).show();
+    }
+
+    private EditText adminDeltaField(String label,String initial) {
+        EditText field=editText(label);field.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_SIGNED);
+        field.setText(initial);LinearLayout.LayoutParams lp=params(-1,48);lp.topMargin=dp(6);field.setLayoutParams(lp);return field;
+    }
+    private void addFormCaption(LinearLayout form,String label) { TextView t=text(label,12,colorMuted(),false);LinearLayout.LayoutParams lp=params(-1,-2);lp.topMargin=dp(10);form.addView(t,lp); }
+    private int parseAdminDelta(EditText field) { try{return Math.max(-1000000,Math.min(1000000,Integer.parseInt(field.getText().toString().trim())));}catch(Exception e){return 0;} }
+    private void applyAdminLevelDelta(JSONObject player,int delta) {
+        int before=player.optInt("level",1),after=Math.max(1,Math.min(1000,before+delta));
+        try{player.put("level",after);int hpCap=Math.max(16,player.optInt("maxHp",16)+(after-before)*3);player.put("maxHp",hpCap);player.put("hp",after>before?hpCap:Math.min(player.optInt("hp",hpCap),hpCap));}catch(Exception ignored){}
+    }
+    private void applyAdminExperience(JSONObject player,int delta) {
+        long xp=Math.max(0L,(long)player.optInt("xp",0)+delta);int level=player.optInt("level",1),gained=0;
+        while(level<20&&xp>=level*70L){xp-=level*70L;level++;gained++;}
+        try{player.put("xp",(int)Math.min(Integer.MAX_VALUE,xp));if(gained>0){player.put("level",level);int hp=player.optInt("maxHp",16)+gained*3;player.put("maxHp",hp);player.put("hp",hp);}}catch(Exception ignored){}
+    }
+    private void addAdminWallet(JSONObject player,String denomination,int delta) {
+        normalizeAdminWallet(player);long total=(long)player.optInt("gold")*100L+(long)player.optInt("silver")*10L+player.optInt("bronze");
+        long scale="gold".equals(denomination)?100L:"silver".equals(denomination)?10L:1L;
+        long max=(long)Integer.MAX_VALUE*100L+99L;total=Math.max(0L,Math.min(max,total+(long)delta*scale));
+        try{player.put("gold",(int)(total/100));player.put("silver",(int)((total%100)/10));player.put("bronze",(int)(total%10));}catch(Exception ignored){}
+    }
+    private void normalizeAdminWallet(JSONObject player) {
+        long total=Math.max(0L,(long)player.optInt("gold",0)*100L+(long)player.optInt("silver",0)*10L+player.optInt("bronze",0));
+        long max=(long)Integer.MAX_VALUE*100L+99L;total=Math.min(total,max);
+        try{player.put("gold",(int)(total/100));player.put("silver",(int)((total%100)/10));player.put("bronze",(int)(total%10));}catch(Exception ignored){}
+    }
+    private void saveAdminPlayer(String id,JSONObject player) {
+        normalizeAdminWallet(player);JSONObject all=readPlayerStates();
+        try { all.put(id,player); } catch(Exception ignored) { Toast.makeText(this,"Не удалось сохранить персонажа",Toast.LENGTH_SHORT).show(); return; }
+        writePlayerStates(all);Toast.makeText(this,"Изменения персонажа сохранены",Toast.LENGTH_SHORT).show();render();
     }
 
     private JSONObject readPlayerStates() { try { return new JSONObject(preferences.getString("telegram_player_states","{}")); } catch(Exception e) { return new JSONObject(); } }
@@ -1286,20 +1349,50 @@ public class MainActivity extends Activity {
     private void renderAdminSkins() {
         adminBack("Облики и награды", "КОЛЛЕКЦИЯ ЛУЧНИКА"); addSpace(10);
         String[][] skins={{"archer-free-female.png","Странница · женский","Стартовый облик"},{"archer-free-male.jpg","Следопыт · мужской","Стартовый облик"},{"archer-frost-female.png","Иней · женский","Сюжетное открытие"},{"archer-frost-male.jpg","Иней · мужской","Сюжетное открытие"},{"archer-gold-female.jpg","Золотой рассвет · женский","Игровая валюта"},{"archer-gold-male.png","Золотой рассвет · мужской","Игровая валюта"},{"archer-starfall-female.gif","Звездопад · женский","Telegram Stars · GIF"},{"archer-starfall-male.gif","Звездопад · мужской","Telegram Stars · GIF"}};
-        addSectionTitle("Доступные образы", "Внешность не меняет класс или характеристики");
-        for(String[] skin:skins){LinearLayout card=cardColumn();LinearLayout.LayoutParams cp=params(-1,-2);cp.topMargin=dp(7);page.addView(card,cp);card.addView(text("🏹  "+skin[1],14,colorText(),true));card.addView(text(skin[2]+" · "+skin[0],11,colorMuted(),false));}
-        TextView note=text("Сюжетные открытия и локальный прогресс доступны в этом прототипе. Реальное выставление цен/покупок и Telegram Stars требует серверной валидации платежей; APK не может безопасно подтверждать платежи самостоятельно.",12,colorMuted(),false);LinearLayout.LayoutParams np=params(-1,-2);np.topMargin=dp(12);page.addView(note,np);
+        addSectionTitle("Доступные образы", "Нажми на карточку, чтобы открыть крупный предпросмотр");
+        for(String[] skin:skins){
+            LinearLayout card=cardColumn();LinearLayout.LayoutParams cp=params(-1,-2);cp.topMargin=dp(7);page.addView(card,cp);
+            LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);card.addView(row);
+            ImageView preview=new ImageView(this);preview.setScaleType(ImageView.ScaleType.FIT_CENTER);Bitmap art=loadSkinArt(skin[0],dp(66),dp(90));if(art!=null)preview.setImageBitmap(art);
+            row.addView(preview,new LinearLayout.LayoutParams(dp(66),dp(90)));
+            LinearLayout detail=new LinearLayout(this);detail.setOrientation(LinearLayout.VERTICAL);LinearLayout.LayoutParams dl=new LinearLayout.LayoutParams(0,-2,1);dl.setMargins(dp(12),0,0,0);row.addView(detail,dl);
+            detail.addView(text("🏹  "+skin[1],14,colorText(),true));detail.addView(text(skin[2]+" · "+skin[0],11,colorMuted(),false));
+            TextView open=actionButton("Показать облик  ›",false);LinearLayout.LayoutParams op=params(-1,38);op.topMargin=dp(7);card.addView(open,op);
+            card.setOnClickListener(v->showSkinPreview(skin[0],skin[1],skin[2]));open.setOnClickListener(v->showSkinPreview(skin[0],skin[1],skin[2]));
+        }
+        TextView note=text("Сюжетные открытия и локальный прогресс доступны в этом прототипе. Реальное выставление цен/покупок и Telegram Stars требует серверной валидации платежей.",12,colorMuted(),false);LinearLayout.LayoutParams np=params(-1,-2);np.topMargin=dp(12);page.addView(note,np);
+    }
+
+    private Bitmap loadSkinArt(String filename,int width,int height) {
+        try(InputStream input=getAssets().open("botcraft/"+filename)) {
+            BitmapFactory.Options options=new BitmapFactory.Options();options.inJustDecodeBounds=true;BitmapFactory.decodeStream(input,null,options);
+            int sample=1;while(options.outWidth/sample>Math.max(1,width*2)||options.outHeight/sample>Math.max(1,height*2))sample*=2;
+            try(InputStream scaled=getAssets().open("botcraft/"+filename)){BitmapFactory.Options actual=new BitmapFactory.Options();actual.inSampleSize=sample;actual.inPreferredConfig=Bitmap.Config.ARGB_8888;return BitmapFactory.decodeStream(scaled,null,actual);}
+        }catch(Exception ignored){return null;}
+    }
+
+    private void showSkinPreview(String filename,String title,String detail) {
+        LinearLayout body=new LinearLayout(this);body.setOrientation(LinearLayout.VERTICAL);body.setGravity(Gravity.CENTER_HORIZONTAL);body.setPadding(dp(18),dp(8),dp(18),dp(8));
+        ImageView image=new ImageView(this);image.setScaleType(ImageView.ScaleType.FIT_CENTER);Bitmap art=loadSkinArt(filename,dp(260),dp(360));if(art!=null)image.setImageBitmap(art);
+        LinearLayout.LayoutParams ip=params(-1,dp(360));body.addView(image,ip);
+        TextView copy=text(detail+"\n"+filename+"\n\nОблик меняет только внешний вид, не класс и характеристики.",13,colorMuted(),false);LinearLayout.LayoutParams cp=params(-1,-2);cp.topMargin=dp(8);body.addView(copy,cp);
+        new AlertDialog.Builder(this).setTitle(title).setView(body).setPositiveButton("Закрыть",null).show();
     }
 
     private void renderAdminEconomy() {
-        adminBack("Экономика", "ВАЛЮТА И ПЛАТЕЖИ"); addSpace(10);
-        addSectionTitle("Настройки и контроль", "Инструменты локального прототипа");
-        LinearLayout card=cardColumn();page.addView(card);
-        card.addView(text("🪙 Золотые монеты",16,colorText(),true));
-        card.addView(text("Баланс игроков хранится локально на устройстве, где запущен бот. Цены и начисления обрабатываются игровыми сценариями; общей таблицы транзакций сейчас нет.",13,colorMuted(),false));
-        LinearLayout stars=cardColumn();LinearLayout.LayoutParams lp=params(-1,-2);lp.topMargin=dp(10);page.addView(stars,lp);
-        stars.addView(text("⭐ Telegram Stars",16,colorText(),true));stars.addView(text("Stars-покупки нельзя подтверждать только на телефоне. Для безопасной оплаты требуется сервер, который проверяет Telegram pre_checkout_query и успешное событие платежа.",13,colorMuted(),false));
-        TextView status=actionButton("Проверить подключение бота",true);LinearLayout.LayoutParams sp=params(-1,46);sp.topMargin=dp(12);page.addView(status,sp);
+        adminBack("Экономика", "ВАЛЮТЫ И ПЛАТЕЖИ"); addSpace(10);
+        addSectionTitle("Игровой кошелёк", "Три внутриигровые валюты с автоматическим разменом");
+        LinearLayout wallet=cardColumn();page.addView(wallet);
+        wallet.addView(text("🟤 Бронза  →  🥈 Серебро  →  🪙 Золото",17,colorText(),true));
+        wallet.addView(text("10 бронзовых = 1 серебряная\n10 серебряных = 1 золотая\n100 бронзовых = 1 золотая",14,colorPrimary(),true));
+        TextView rule=text("Баланс хранится в нормализованном виде: при накоплении десяти монет меньшего номинала они автоматически превращаются в одну монету следующего номинала. Начисления и списания доступны в карточке каждого игрока.",12,colorMuted(),false);LinearLayout.LayoutParams rp=params(-1,-2);rp.topMargin=dp(8);wallet.addView(rule,rp);
+        TextView players=actionButton("Управлять балансом и уровнями игроков",true);LinearLayout.LayoutParams pl=params(-1,46);pl.topMargin=dp(10);page.addView(players,pl);
+        players.setOnClickListener(v->{screen="admin_players";render();});
+        addSectionTitle("Telegram Stars", "Отдельно от внутриигровых монет");
+        LinearLayout stars=cardColumn();page.addView(stars);
+        stars.addView(text("⭐ Stars используются только для внешних покупок",15,colorText(),true));
+        stars.addView(text("Telegram Stars не входят в курс обмена бронзы, серебра и золота. APK не хранит и не переводит Stars игрокам. Для подтверждения платежей нужен сервер с проверкой pre_checkout_query и успешного платежа Telegram.",13,colorMuted(),false));
+        TextView status=actionButton("Открыть настройки Telegram-бота",false);LinearLayout.LayoutParams sp=params(-1,46);sp.topMargin=dp(12);page.addView(status,sp);
         status.setOnClickListener(v->{adminReturnScreen="admin";screen="admin_bot";render();});
     }
 
