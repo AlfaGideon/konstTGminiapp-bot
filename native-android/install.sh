@@ -7,7 +7,7 @@ mkdir -p "$ACTIVITY_DIR"
 cp native-android/MainActivity.java "$ACTIVITY_DIR/MainActivity.java"
 cp native-android/WorldBotService.java "$ACTIVITY_DIR/WorldBotService.java"
 mkdir -p "$APP_DIR/assets/botcraft"
-cp native-android/game-art/*.jpg "$APP_DIR/assets/botcraft/"
+find native-android/game-art -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' \) -exec cp {} "$APP_DIR/assets/botcraft/" \;
 
 python3 - <<'PY'
 from pathlib import Path

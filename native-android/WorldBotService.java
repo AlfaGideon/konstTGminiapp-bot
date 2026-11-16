@@ -100,7 +100,7 @@ public final class WorldBotService extends Service {
             while (running) {
                 HttpURLConnection connection = null;
                 try {
-                    String query = "?timeout=25&offset=" + offset + "&allowed_updates=" + URLEncoder.encode("[\"message\",\"callback_query\"]", "UTF-8");
+                    String query = "?timeout=25&offset=" + offset + "&allowed_updates=" + URLEncoder.encode("[\"message\",\"callback_query\",\"pre_checkout_query\"]", "UTF-8");
                     connection = (HttpURLConnection) new URL(api(token, "getUpdates") + query).openConnection();
                     activeConnection = connection;
                     connection.setRequestMethod("GET");
@@ -113,11 +113,11 @@ public final class WorldBotService extends Service {
                         JSONObject update = updates.optJSONObject(i);
                         if (update == null) continue;
                         long updateId = update.optLong("update_id", -1);
+                        handleUpdate(token, update);
                         if (updateId >= offset) {
                             offset = updateId + 1;
                             prefs().edit().putLong("telegram_update_offset", offset).apply();
                         }
-                        handleUpdate(token, update);
                     }
                 } catch (Exception error) {
                     if (running) {
@@ -155,6 +155,8 @@ public final class WorldBotService extends Service {
         addBotCommand(values, "wardrobe", "Экипировка и одежда");
         addBotCommand(values, "quests", "Журнал заданий");
         addBotCommand(values, "skin", "Сменить внешний облик");
+        addBotCommand(values, "terms", "Условия покупки цифровых обликов");
+        addBotCommand(values, "paysupport", "Поддержка по оплатам Telegram Stars");
         addBotCommand(values, "restart", "Начать историю заново");
         commands.put("commands", values);
         telegramPost(token, "setMyCommands", commands);
@@ -175,11 +177,15 @@ public final class WorldBotService extends Service {
     }
 
     private void handleUpdate(String token, JSONObject update) {
+        JSONObject preCheckout = update.optJSONObject("pre_checkout_query");
+        if (preCheckout != null) { handleSkinPreCheckout(token, preCheckout); return; }
         JSONObject message = update.optJSONObject("message");
         if (message != null) {
             JSONObject chat = message.optJSONObject("chat");
             if (chat == null) return;
             long chatId = chat.optLong("id");
+            JSONObject successfulPayment = message.optJSONObject("successful_payment");
+            if (successfulPayment != null) { handleSkinSuccessfulPayment(token, chatId, successfulPayment); return; }
             String text = message.optString("text", "").trim();
             if (text.startsWith("/start")) {
                 JSONObject world = activeWorld();
@@ -203,6 +209,10 @@ public final class WorldBotService extends Service {
                 showQuests(token, chatId, loadPlayer(chatId, activeWorld(), false));
             } else if (text.startsWith("/skin")) {
                 showSkinSelector(token, chatId, loadPlayer(chatId, activeWorld(), false));
+            } else if (text.startsWith("/terms")) {
+                sendText(token, chatId, "Условия: платные облики лучника — цифровые косметические предметы. Они не меняют класс, силу, здоровье или навыки. Покупки за Telegram Stars выполняются только через официальный счёт Telegram.");
+            } else if (text.startsWith("/paysupport")) {
+                sendText(token, chatId, "Поддержка оплат: обратись к владельцу этого игрового бота в Telegram и приложи чек/идентификатор платежа из истории Telegram Stars.");
             } else if (text.startsWith("/restart")) {
                 JSONObject world = activeWorld();
                 String startId = startNodeId(world);
@@ -282,11 +292,13 @@ public final class WorldBotService extends Service {
     private JSONObject newPlayer(String worldId) {
         JSONObject player = new JSONObject();
         try {
-            String defaultSkin = prefs().getString(CAMPAIGN_SKIN_KEY, "wanderer");
-            player.put("worldId", worldId); player.put("hp", 16); player.put("maxHp", 16);
+            String defaultSkin = defaultSkinId(prefs().getString(CAMPAIGN_SKIN_KEY, "archer_trail_f"));
+            player.put("worldId", worldId); player.put("characterClass", "archer"); player.put("appearanceGender", skinGender(defaultSkin));
+            player.put("hp", 16); player.put("maxHp", 16);
             player.put("gold", 45); player.put("xp", 0); player.put("level", 1); player.put("inventory", new JSONArray());
             player.put("gear", new JSONArray()); player.put("equipment", new JSONObject());
-            JSONArray skins = new JSONArray(); skins.put(defaultSkin); player.put("skins", skins); player.put("skin", defaultSkin);
+            JSONArray skins = new JSONArray(); addBaseArcherSkins(skins); player.put("skins", skins); player.put("skin", defaultSkin);
+            player.put("processedSkinPayments", new JSONArray());
             player.put("quests", new JSONObject()); player.put("kills", new JSONObject()); player.put("resources", new JSONObject());
             JSONArray visitedRegions = new JSONArray(); visitedRegions.put("harbor"); player.put("visitedRegions", visitedRegions);
             player.put("currentRegion", "harbor"); player.put("currentMode", "story");
@@ -301,7 +313,9 @@ public final class WorldBotService extends Service {
     private void migratePlayer(JSONObject player) {
         if (player == null) return;
         try {
-            String defaultSkin = prefs().getString(CAMPAIGN_SKIN_KEY, "wanderer");
+            String defaultSkin = defaultSkinId(prefs().getString(CAMPAIGN_SKIN_KEY, "archer_trail_f"));
+            if (!player.has("characterClass")) player.put("characterClass", "archer");
+            player.put("characterClass", "archer");
             if (!player.has("level")) player.put("level", 1);
             if (!player.has("gear")) player.put("gear", new JSONArray());
             if (!player.has("equipment")) player.put("equipment", new JSONObject());
@@ -314,8 +328,14 @@ public final class WorldBotService extends Service {
             if (!player.has("gridX")) player.put("gridX", 50);
             if (!player.has("gridY")) player.put("gridY", 50);
             if (!player.has("resolvedGridEvents")) player.put("resolvedGridEvents", new JSONArray());
-            if (!player.has("skins")) { JSONArray skins = new JSONArray(); skins.put(defaultSkin); player.put("skins", skins); }
-            if (!player.has("skin")) player.put("skin", defaultSkin);
+            JSONArray oldSkins = player.optJSONArray("skins"); JSONArray skins = new JSONArray(); addBaseArcherSkins(skins);
+            if (oldSkins != null) for (int i = 0; i < oldSkins.length(); i++) { String id = oldSkins.optString(i, ""); if (isArcherSkin(id)) addString(skins, id); }
+            player.put("skins", skins);
+            String currentSkin = player.optString("skin", defaultSkin); if (!isArcherSkin(currentSkin)) currentSkin = defaultSkin;
+            if (isArcherSkin(currentSkin) && !contains(skins, currentSkin) && "archer_trail_f".equals(currentSkin)) addString(skins, currentSkin);
+            player.put("skin", currentSkin); player.put("appearanceGender", skinGender(currentSkin));
+            if (!player.has("processedSkinPayments")) player.put("processedSkinPayments", new JSONArray());
+            unlockSkins(player);
             if (!player.has("pageMessageId")) player.put("pageMessageId", 0);
             if (!player.has("maxHp")) player.put("maxHp", 12);
             if (!player.has("hp")) player.put("hp", player.optInt("maxHp", 12));
@@ -599,6 +619,7 @@ public final class WorldBotService extends Service {
         int y = Math.max(0, Math.min(99, player.optInt("gridY", 50)));
         String regionId = regionForGrid(x, y); JSONObject region = findRegion(world, regionId);
         JSONArray visited = player.optJSONArray("visitedRegions"); boolean newRegion = !contains(visited, regionId); if (newRegion) addString(visited, regionId);
+        String skinUnlockNotice = newRegion ? unlockSkinsForRegion(player, regionId) : "";
         try { player.put("gridX", x); player.put("gridY", y); player.put("currentRegion", regionId); player.put("currentMode", "world"); savePlayer(chatId, player); } catch (Exception ignored) { }
 
         StringBuilder text = new StringBuilder("МИРОВАЯ КАРТА · 100 × 100\n");
@@ -607,6 +628,7 @@ public final class WorldBotService extends Service {
         text.append("\nНажми соседнюю клетку или стрелку, чтобы сделать один шаг. Диагоналей нет.");
         text.append("\n🔒 — непроходимая клетка. Исследуй доступные точки интереса.");
         if (newRegion) text.append("\nНовая область открыта.");
+        if (!skinUnlockNotice.isEmpty()) text.append("\n\n").append(skinUnlockNotice);
         if (!notice.isEmpty()) text.append("\n\n").append(notice);
         JSONObject here = eventAt(world, x, y);
         boolean eventAvailable = here != null && !contains(player.optJSONArray("resolvedGridEvents"), here.optString("id", ""));
@@ -843,6 +865,8 @@ public final class WorldBotService extends Service {
             case "potion": drinkPotion(token, chatId, world, player); break;
             case "equip": if (parts.length > 1) equipGear(token, chatId, world, player, parts[1]); break;
             case "skin": if (parts.length > 1) changeSkin(token, chatId, world, player, parts[1]); break;
+            case "skinbuy": if (parts.length > 1) buyArcherSkin(token, chatId, world, player, parts[1]); break;
+            case "skinpay": if (parts.length > 1) sendArcherSkinInvoice(token, chatId, player, parts[1]); break;
             case "craft": craftGear(token, chatId, world, player, parts.length > 1 ? parts[1] : ""); break;
             case "quest": if (parts.length > 2) updateQuest(token, chatId, world, player, parts[1], parts[2]); break;
             default: showWorldMap(token, chatId, world, player); break;
@@ -1058,16 +1082,17 @@ public final class WorldBotService extends Service {
 
     private void showCharacter(String token, long chatId, JSONObject player) {
         JSONObject equipment = player.optJSONObject("equipment");
-        String skin = skinName(player.optString("skin", "wanderer"));
+        String skinId = player.optString("skin", "archer_trail_f");
+        String skin = skinName(skinId);
         int nextLevel = player.optInt("level", 1) * 70;
-        String text = "ПЕРСОНАЖ · " + skin + "\n\nУровень " + player.optInt("level", 1) + " · опыт " + player.optInt("xp", 0) + "/" + nextLevel
+        String text = "ПЕРСОНАЖ · ЛУЧНИК\nОблик: " + skin + "\n\nУровень " + player.optInt("level", 1) + " · опыт " + player.optInt("xp", 0) + "/" + nextLevel
             + "\n❤️ Здоровье: " + player.optInt("hp", 12) + "/" + player.optInt("maxHp", 12)
             + "\n⚔️ Атака: " + playerAttack(player) + " · 🛡 защита: " + playerDefense(player)
             + "\n🪙 Монеты: " + player.optInt("gold")
             + "\n\nНадето:\nОружие — " + gearName(equipment == null ? "" : equipment.optString("weapon", ""))
             + "\nОдежда — " + gearName(equipment == null ? "" : equipment.optString("armor", ""))
             + "\nАксессуар — " + gearName(equipment == null ? "" : equipment.optString("charm", ""))
-            + "\n\nОпыт дают за победы над мобами и выполнение квестов. При новом уровне растут здоровье и сила, открываются новые облики.";
+            + "\n\nОпыт дают за победы над мобами и выполнение квестов. При новом уровне растут здоровье и сила. Облики меняют только внешний вид; новые костюмы открываются по сюжету или приобретаются.";
         JSONArray keyboard = new JSONArray();
         try { addButtonRow(keyboard, "👘 Сменить скин", "ow:skin"); addButtonRow(keyboard, "🛡 Гардероб и экипировка", "ow:wardrobe"); addButtonRow(keyboard, "🗺 Карта", "ow:map"); }
         catch (Exception ignored) { }
@@ -1109,22 +1134,149 @@ public final class WorldBotService extends Service {
         sendPage(token, chatId, text.toString(), keyboard, skinImageName(player.optString("skin", "wanderer")));
     }
 
-    private void showSkinSelector(String token, long chatId, JSONObject player) {
-        String[] ids = {"wanderer", "ranger", "arctic", "scholar", "storm", "royal"};
-        String[] names = {"Странник", "Следопыт", "Полярник", "Хранитель рун", "Штормовой", "Северный князь"};
-        String[] icons = {"🧥", "🏹", "❄️", "🔮", "⚡", "👑"};
-        int[] levels = {1, 2, 3, 4, 5, 7};
-        StringBuilder text = new StringBuilder("ОБЛИКИ ГЕРОЯ\n\nВыбери образ. Часть внешности открывается с новыми уровнями; стартовый образ задаётся в APK.");
+    private void showSkinSelector(String token, long chatId, JSONObject player) { showSkinSelector(token, chatId, player, ""); }
+
+    private void showSkinSelector(String token, long chatId, JSONObject player, String notice) {
+        String[] ids = {"archer_trail_f", "archer_trail_m", "archer_frost_f", "archer_frost_m", "archer_gilded_f", "archer_gilded_m", "archer_starfall_f", "archer_starfall_m"};
+        StringBuilder text = new StringBuilder("ОБЛИКИ КЛАССА · ЛУЧНИК\n\nВсе костюмы используют одного и того же персонажа и не меняют класс, характеристики или навыки. Лицо и волосы у мужской и женской версий постоянны.\n");
         JSONArray keyboard = new JSONArray();
         try {
-            for (int i = 0; i < ids.length; i++) {
-                boolean unlocked = contains(player.optJSONArray("skins"), ids[i]) || player.optInt("level", 1) >= levels[i];
-                text.append("\n").append(unlocked ? icons[i] : "🔒").append(" ").append(names[i]).append(unlocked ? "" : " · уровень " + levels[i]);
-                if (unlocked) addButtonRow(keyboard, (ids[i].equals(player.optString("skin")) ? "✓ " : "") + icons[i] + " " + names[i], "ow:skin:" + ids[i]);
+            for (String id : ids) {
+                String name = skinName(id); boolean unlocked = contains(player.optJSONArray("skins"), id);
+                int goldPrice = skinGoldPrice(id), starsPrice = skinStarsPrice(id);
+                String status;
+                if (unlocked) status = " · открыто";
+                else if (goldPrice > 0) status = " · " + goldPrice + " монет";
+                else if (starsPrice > 0) status = " · " + starsPrice + " ⭐";
+                else status = " · сюжет: Хрустальные пещеры";
+                text.append("\n• ").append(name).append(status);
+                if (unlocked) addButtonRow(keyboard, (id.equals(player.optString("skin", "")) ? "✓ " : "👘 ") + name, "ow:skin:" + id);
+                else if (goldPrice > 0) addButtonRow(keyboard, "🪙 Купить · " + name + " · " + goldPrice, "ow:skinbuy:" + id);
+                else if (starsPrice > 0) addButtonRow(keyboard, "⭐ Купить · " + name + " · " + starsPrice, "ow:skinpay:" + id);
             }
             addButtonRow(keyboard, "👤 Карточка персонажа", "ow:character");
         } catch (Exception ignored) { }
-        sendPage(token, chatId, text.toString(), keyboard, skinImageName(player.optString("skin", "wanderer")));
+        if (!notice.isEmpty()) text.append("\n\n").append(notice);
+        text.append("\n\n🧊 Два морозных костюма откроются при первом входе в Хрустальные пещеры.");
+        sendPage(token, chatId, text.toString(), keyboard, skinImageName(player.optString("skin", "archer_trail_f")));
+    }
+
+    private int skinGoldPrice(String id) { return id != null && id.startsWith("archer_gilded_") ? 600 : 0; }
+    private int skinStarsPrice(String id) { return id != null && id.startsWith("archer_starfall_") ? 120 : 0; }
+
+    private boolean isArcherSkin(String id) {
+        return "archer_trail_f".equals(id) || "archer_trail_m".equals(id)
+            || "archer_frost_f".equals(id) || "archer_frost_m".equals(id)
+            || "archer_gilded_f".equals(id) || "archer_gilded_m".equals(id)
+            || "archer_starfall_f".equals(id) || "archer_starfall_m".equals(id);
+    }
+
+    private String defaultSkinId(String value) {
+        return "archer_trail_m".equals(value) ? "archer_trail_m" : "archer_trail_f";
+    }
+
+    private String skinGender(String id) { return id != null && id.endsWith("_m") ? "male" : "female"; }
+
+    private void addBaseArcherSkins(JSONArray skins) {
+        addString(skins, "archer_trail_f"); addString(skins, "archer_trail_m");
+    }
+
+    private void unlockSkins(JSONObject player) {
+        JSONArray skins = player.optJSONArray("skins");
+        if (skins == null) { skins = new JSONArray(); try { player.put("skins", skins); } catch (Exception ignored) { } }
+        addBaseArcherSkins(skins);
+        if (contains(player.optJSONArray("visitedRegions"), "crystal_cave")) {
+            addString(skins, "archer_frost_f"); addString(skins, "archer_frost_m");
+        }
+    }
+
+    private String unlockSkinsForRegion(JSONObject player, String regionId) {
+        if (!"crystal_cave".equals(regionId)) return "";
+        JSONArray skins = player.optJSONArray("skins");
+        if (skins == null) { skins = new JSONArray(); try { player.put("skins", skins); } catch (Exception ignored) { } }
+        boolean fresh = !contains(skins, "archer_frost_f") || !contains(skins, "archer_frost_m");
+        addString(skins, "archer_frost_f"); addString(skins, "archer_frost_m");
+        return fresh ? "Сюжетная награда: Хрустальные пещеры открыли два морозных облика лучника — мужской и женский." : "";
+    }
+
+    private String skinName(String id) {
+        String gender = skinGender(id).equals("male") ? "муж." : "жен.";
+        if ("archer_frost_f".equals(id) || "archer_frost_m".equals(id)) return "Морозный следопыт · " + gender;
+        if ("archer_gilded_f".equals(id) || "archer_gilded_m".equals(id)) return "Золотой дозор · " + gender;
+        if ("archer_starfall_f".equals(id) || "archer_starfall_m".equals(id)) return "Звездопад · " + gender;
+        return "Лесной следопыт · " + gender;
+    }
+
+    private String skinImageName(String id) {
+        if ("archer_frost_f".equals(id)) return "archer-frost-female.png";
+        if ("archer_frost_m".equals(id)) return "archer-frost-male.jpg";
+        if ("archer_gilded_f".equals(id)) return "archer-gold-female.jpg";
+        if ("archer_gilded_m".equals(id)) return "archer-gold-male.png";
+        if ("archer_starfall_f".equals(id)) return "archer-starfall-female.gif";
+        if ("archer_starfall_m".equals(id)) return "archer-starfall-male.gif";
+        if ("archer_trail_m".equals(id)) return "archer-free-male.jpg";
+        return "archer-free-female.png";
+    }
+
+    private void buyArcherSkin(String token, long chatId, JSONObject world, JSONObject player, String id) {
+        int price = skinGoldPrice(id);
+        if (!isArcherSkin(id) || price <= 0 || contains(player.optJSONArray("skins"), id)) { showSkinSelector(token, chatId, player); return; }
+        if (player.optInt("gold", 0) < price) { showSkinSelector(token, chatId, player, "Не хватает монет: для покупки нужно " + price + "."); return; }
+        try {
+            player.put("gold", player.optInt("gold", 0) - price);
+            addString(player.optJSONArray("skins"), id);
+            savePlayer(chatId, player);
+        } catch (Exception ignored) { }
+        showSkinSelector(token, chatId, player, "Покупка завершена. Облик добавлен в коллекцию и не меняет характеристики лучника.");
+    }
+
+    private void sendArcherSkinInvoice(String token, long chatId, JSONObject player, String id) {
+        int stars = skinStarsPrice(id);
+        if (!isArcherSkin(id) || stars <= 0 || contains(player.optJSONArray("skins"), id)) { showSkinSelector(token, chatId, player); return; }
+        try {
+            JSONArray prices = new JSONArray(); JSONObject price = new JSONObject();
+            price.put("label", skinName(id)); price.put("amount", stars); prices.put(price);
+            JSONObject invoice = new JSONObject(); invoice.put("chat_id", chatId);
+            invoice.put("title", limit("Облик «" + skinName(id) + "»", 32));
+            invoice.put("description", "Анимированный GIF-костюм лучника. Только внешний вид, без бонусов к силе.");
+            invoice.put("payload", "archer_skin:" + id); invoice.put("provider_token", "");
+            invoice.put("currency", "XTR"); invoice.put("prices", prices);
+            JSONObject response = telegramPost(token, "sendInvoice", invoice);
+            if (!response.optBoolean("ok", false)) showSkinSelector(token, chatId, player, "Не удалось создать счёт Telegram Stars. Попробуй ещё раз позже.");
+        } catch (Exception ignored) { showSkinSelector(token, chatId, player, "Не удалось создать счёт Telegram Stars. Попробуй ещё раз позже."); }
+    }
+
+    private void handleSkinPreCheckout(String token, JSONObject query) {
+        String payload = query.optString("invoice_payload", "");
+        String id = payload.startsWith("archer_skin:") ? payload.substring("archer_skin:".length()) : "";
+        JSONObject from = query.optJSONObject("from");
+        long userId = from == null ? 0 : from.optLong("id");
+        JSONObject player = userId == 0 ? null : loadPlayer(userId, activeWorld(), false);
+        int stars = skinStarsPrice(id);
+        boolean valid = isArcherSkin(id) && stars > 0 && "XTR".equals(query.optString("currency", ""))
+            && query.optInt("total_amount", 0) == stars && player != null && !contains(player.optJSONArray("skins"), id);
+        try {
+            JSONObject answer = new JSONObject(); answer.put("pre_checkout_query_id", query.optString("id", "")); answer.put("ok", valid);
+            if (!valid) answer.put("error_message", "Этот облик уже куплен или счёт недействителен. Открой гардероб и попробуй снова.");
+            telegramPost(token, "answerPreCheckoutQuery", answer);
+        } catch (Exception ignored) { }
+    }
+
+    private void handleSkinSuccessfulPayment(String token, long chatId, JSONObject payment) {
+        String payload = payment.optString("invoice_payload", "");
+        String id = payload.startsWith("archer_skin:") ? payload.substring("archer_skin:".length()) : "";
+        int stars = skinStarsPrice(id);
+        if (!isArcherSkin(id) || stars <= 0 || !"XTR".equals(payment.optString("currency", "")) || payment.optInt("total_amount", 0) != stars) {
+            sendText(token, chatId, "Платёж получен, но счёт не удалось сопоставить с обликом. Напиши администратору бота."); return;
+        }
+        JSONObject player = loadPlayer(chatId, activeWorld(), false);
+        String chargeId = payment.optString("telegram_payment_charge_id", "");
+        JSONArray processed = player.optJSONArray("processedSkinPayments");
+        if (processed == null) { processed = new JSONArray(); try { player.put("processedSkinPayments", processed); } catch (Exception ignored) { } }
+        if (contains(processed, chargeId)) { showSkinSelector(token, chatId, player, "Этот платёж уже был обработан."); return; }
+        addString(processed, chargeId); addString(player.optJSONArray("skins"), id);
+        savePlayer(chatId, player);
+        showSkinSelector(token, chatId, player, "Оплата Telegram Stars подтверждена. Анимированный облик добавлен в коллекцию.");
     }
 
     private void showQuests(String token, long chatId, JSONObject player) { showQuestPage(token, chatId, player, 0); }
@@ -1259,32 +1411,9 @@ public final class WorldBotService extends Service {
     }
 
     private void changeSkin(String token, long chatId, JSONObject world, JSONObject player, String skin) {
-        String[] ids = {"wanderer", "ranger", "arctic", "scholar", "storm", "royal"}; int[] levels = {1, 2, 3, 4, 5, 7}; int required = 99;
-        for (int i = 0; i < ids.length; i++) if (skin.equals(ids[i])) required = levels[i];
-        boolean unlocked = contains(player.optJSONArray("skins"), skin) || player.optInt("level", 1) >= required;
-        if (!unlocked) { showSkinSelector(token, chatId, player); return; }
-        addString(player.optJSONArray("skins"), skin);
-        try { player.put("skin", skin); savePlayer(chatId, player); } catch (Exception ignored) { }
+        if (!isArcherSkin(skin) || !contains(player.optJSONArray("skins"), skin)) { showSkinSelector(token, chatId, player); return; }
+        try { player.put("skin", skin); player.put("appearanceGender", skinGender(skin)); savePlayer(chatId, player); } catch (Exception ignored) { }
         showCharacter(token, chatId, player);
-    }
-
-    private void unlockSkins(JSONObject player) {
-        String[] ids = {"wanderer", "ranger", "arctic", "scholar", "storm", "royal"}; int[] levels = {1, 2, 3, 4, 5, 7};
-        JSONArray skins = player.optJSONArray("skins");
-        if (skins == null) { skins = new JSONArray(); try { player.put("skins", skins); } catch (Exception ignored) { } }
-        for (int i = 0; i < ids.length; i++) if (player.optInt("level", 1) >= levels[i]) addString(skins, ids[i]);
-    }
-
-    private String skinName(String id) {
-        switch (id) {
-            case "ranger": return "🏹 Следопыт"; case "arctic": return "❄️ Полярник"; case "scholar": return "🔮 Хранитель рун";
-            case "storm": return "⚡ Штормовой"; case "royal": return "👑 Северный князь"; default: return "🧥 Странник";
-        }
-    }
-
-    private String skinImageName(String id) {
-        if ("ranger".equals(id) || "arctic".equals(id) || "scholar".equals(id) || "storm".equals(id) || "royal".equals(id)) return "skin-" + id + ".jpg";
-        return "skin-wanderer.jpg";
     }
 
     private void craftGear(String token, long chatId, JSONObject world, JSONObject player, String recipe) {
@@ -1433,6 +1562,48 @@ public final class WorldBotService extends Service {
         } finally { connection.disconnect(); }
     }
 
+    private JSONObject sendAnimation(String token, JSONObject payload, String animationName) throws Exception {
+        byte[] animation = readAsset(animationName);
+        String boundary = "BotcraftAnimation" + System.nanoTime();
+        HttpURLConnection connection = (HttpURLConnection) new URL(api(token, "sendAnimation")).openConnection();
+        try {
+            connection.setRequestMethod("POST"); connection.setConnectTimeout(15000); connection.setReadTimeout(30000);
+            connection.setDoOutput(true); connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            try (OutputStream output = connection.getOutputStream()) {
+                for (String field : new String[] {"chat_id", "caption", "reply_markup"}) if (payload.has(field)) writeField(output, boundary, field, payload.optString(field, ""));
+                output.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"animation\"; filename=\"" + animationName + "\"\r\nContent-Type: image/gif\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                output.write(animation); output.write("\r\n".getBytes(StandardCharsets.UTF_8));
+                output.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+            }
+            InputStream response = connection.getResponseCode() >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            if (response == null) throw new IllegalStateException("Empty Telegram response");
+            return new JSONObject(readAll(response));
+        } finally { connection.disconnect(); }
+    }
+
+    private JSONObject editAnimationMessage(String token, long chatId, long messageId, String caption, JSONObject markup, String animationName) throws Exception {
+        byte[] animation = readAsset(animationName);
+        JSONObject media = new JSONObject(); media.put("type", "animation"); media.put("media", "attach://animation"); media.put("caption", limit(caption, 1000));
+        String boundary = "BotcraftEditAnimation" + System.nanoTime();
+        HttpURLConnection connection = (HttpURLConnection) new URL(api(token, "editMessageMedia")).openConnection();
+        try {
+            connection.setRequestMethod("POST"); connection.setConnectTimeout(15000); connection.setReadTimeout(30000);
+            connection.setDoOutput(true); connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            try (OutputStream output = connection.getOutputStream()) {
+                writeField(output, boundary, "chat_id", Long.toString(chatId));
+                writeField(output, boundary, "message_id", Long.toString(messageId));
+                writeField(output, boundary, "media", media.toString());
+                if (markup != null) writeField(output, boundary, "reply_markup", markup.toString());
+                output.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"animation\"; filename=\"" + animationName + "\"\r\nContent-Type: image/gif\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                output.write(animation); output.write("\r\n".getBytes(StandardCharsets.UTF_8));
+                output.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+            }
+            InputStream response = connection.getResponseCode() >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            if (response == null) throw new IllegalStateException("Empty Telegram response");
+            return new JSONObject(readAll(response));
+        } finally { connection.disconnect(); }
+    }
+
     private JSONObject editPhotoMessage(String token, long chatId, long messageId, String caption, JSONObject markup, String imageName) throws Exception {
         byte[] photo = readAsset(imageName);
         JSONObject media = new JSONObject(); media.put("type", "photo"); media.put("media", "attach://photo"); media.put("caption", limit(caption, 1000));
@@ -1462,51 +1633,49 @@ public final class WorldBotService extends Service {
         long messageId = player.optLong("pageMessageId", 0L);
         String pageMode = player.optString("pageMode", "photo");
         boolean textOnly = imageName == null || imageName.isEmpty();
+        String desiredMode = textOnly ? "text" : imageName.toLowerCase(Locale.ROOT).endsWith(".gif") ? "animation" : "photo";
         String desiredImage = textOnly ? "" : imageName;
-        if (messageId > 0 && ((textOnly && !"text".equals(pageMode)) || (!textOnly && "text".equals(pageMode)))) {
+        if (messageId > 0 && !desiredMode.equals(pageMode)) {
             try {
                 JSONObject delete = new JSONObject(); delete.put("chat_id", chatId); delete.put("message_id", messageId);
                 telegramPost(token, "deleteMessage", delete);
             } catch (Exception ignored) { }
             messageId = 0;
-            try { player.put("pageMessageId", 0); player.put("pageMode", textOnly ? "text" : "photo"); savePlayer(chatId, player); } catch (Exception ignored) { }
+            try { player.put("pageMessageId", 0); player.put("pageMode", desiredMode); savePlayer(chatId, player); } catch (Exception ignored) { }
         }
         if (messageId > 0) {
             JSONObject payload = new JSONObject();
             try {
-                if (!"text".equals(pageMode) && !desiredImage.equals(player.optString("pageImage", ""))) {
-                    JSONObject mediaEdit = editPhotoMessage(token, chatId, messageId, caption, markup, desiredImage);
-                    if (mediaEdit.optBoolean("ok", false)) { player.put("pageImage", desiredImage); savePlayer(chatId, player); return; }
+                if ("photo".equals(desiredMode) && !desiredImage.equals(player.optString("pageImage", ""))) {
+                    JSONObject changed = editPhotoMessage(token, chatId, messageId, caption, markup, desiredImage);
+                    if (changed.optBoolean("ok", false)) { player.put("pageImage", desiredImage); savePlayer(chatId, player); return; }
+                }
+                if ("animation".equals(desiredMode) && !desiredImage.equals(player.optString("pageImage", ""))) {
+                    JSONObject changed = editAnimationMessage(token, chatId, messageId, caption, markup, desiredImage);
+                    if (changed.optBoolean("ok", false)) { player.put("pageImage", desiredImage); savePlayer(chatId, player); return; }
                 }
                 payload.put("chat_id", chatId); payload.put("message_id", messageId);
                 payload.put("reply_markup", markup == null ? new JSONObject() : markup);
-                if ("text".equals(pageMode)) payload.put("text", limit(caption, 4000));
+                if ("text".equals(desiredMode)) payload.put("text", limit(caption, 4000));
                 else payload.put("caption", limit(caption, 1000));
-                JSONObject edited = telegramPost(token, "text".equals(pageMode) ? "editMessageText" : "editMessageCaption", payload);
+                String method = "text".equals(desiredMode) ? "editMessageText" : "editMessageCaption";
+                JSONObject edited = telegramPost(token, method, payload);
                 if (edited.optBoolean("ok", false) || isUnchanged(edited)) return;
-                if (!"text".equals(pageMode)) {
-                    payload.remove("caption"); payload.put("text", limit(caption, 4000));
-                    JSONObject textEdit = telegramPost(token, "editMessageText", payload);
-                    if (textEdit.optBoolean("ok", false) || isUnchanged(textEdit)) {
-                        player.put("pageMode", "text"); savePlayer(chatId, player); return;
-                    }
-                }
             } catch (Exception ignored) { }
         }
-        if (!textOnly) try {
-            JSONObject payload = new JSONObject(); payload.put("chat_id", chatId);
-            payload.put("caption", limit(caption, 1000));
-            if (markup != null) payload.put("reply_markup", markup);
-            JSONObject sent = sendPhoto(token, payload, desiredImage);
-            JSONObject message = sent.optJSONObject("result");
-            if (message != null) { player.put("pageMessageId", message.optLong("message_id", 0L)); player.put("pageMode", "photo"); player.put("pageImage", desiredImage); savePlayer(chatId, player); return; }
-        } catch (Exception ignored) { }
         try {
-            JSONObject payload = new JSONObject(); payload.put("chat_id", chatId); payload.put("text", limit(caption, 4000));
+            JSONObject payload = new JSONObject(); payload.put("chat_id", chatId);
+            if ("text".equals(desiredMode)) payload.put("text", limit(caption, 4000));
+            else payload.put("caption", limit(caption, 1000));
             if (markup != null) payload.put("reply_markup", markup);
-            JSONObject sent = telegramPost(token, "sendMessage", payload);
+            JSONObject sent = "photo".equals(desiredMode) ? sendPhoto(token, payload, desiredImage)
+                : "animation".equals(desiredMode) ? sendAnimation(token, payload, desiredImage)
+                : telegramPost(token, "sendMessage", payload);
             JSONObject message = sent.optJSONObject("result");
-            if (message != null) { player.put("pageMessageId", message.optLong("message_id", 0L)); player.put("pageMode", "text"); player.put("pageImage", ""); savePlayer(chatId, player); }
+            if (message != null) {
+                player.put("pageMessageId", message.optLong("message_id", 0L));
+                player.put("pageMode", desiredMode); player.put("pageImage", desiredImage); savePlayer(chatId, player);
+            }
         } catch (Exception ignored) { }
     }
 

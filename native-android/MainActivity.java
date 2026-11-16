@@ -74,8 +74,8 @@ public class MainActivity extends Activity {
     private static final String STARTER_WORLD_ID = "demo-north-archipelago";
     private static final String CAMPAIGN_SKIN_KEY = "campaign_player_skin";
     private static final String[][] CAMPAIGN_SKINS = {
-        {"wanderer", "🧥", "Странник"}, {"ranger", "🏹", "Следопыт"}, {"arctic", "❄️", "Полярник"},
-        {"scholar", "🔮", "Хранитель"}, {"storm", "⚡", "Штормовой"}, {"royal", "👑", "Княжеский"}
+        {"archer_trail_f", "🏹", "Лучник · девушка", "archer-free-female.png"},
+        {"archer_trail_m", "🏹", "Лучник · парень", "archer-free-male.jpg"}
     };
     private static final String BOT_TOKEN_KEY_ALIAS = "botcraft-telegram-token-v1";
     private static final int INSTALL_PERMISSION_REQUEST = 411;
@@ -579,19 +579,21 @@ public class MainActivity extends Activity {
         card.addView(text("ГАРДЕРОБ ПЕРСОНАЖА", 10, colorPrimary(), true));
         TextView title = text("Настрой облик героя", 17, colorText(), true);
         LinearLayout.LayoutParams titleLp = params(-1, -2); titleLp.topMargin = dp(5); card.addView(title, titleLp);
-        TextView hint = text("Выбери стартовый скин для новых игроков. В Telegram можно будет менять образы и надевать найденную экипировку.", 12, colorMuted(), false);
+        TextView hint = text("Класс новых героев — лучник. Выбери стартовый мужской или женский рисунок; одежда не меняет класс и характеристики.", 12, colorMuted(), false);
         LinearLayout.LayoutParams hintLp = params(-1, -2); hintLp.topMargin = dp(4); card.addView(hint, hintLp);
-        String selected = preferences.getString(CAMPAIGN_SKIN_KEY, "wanderer");
-        for (int row = 0; row < 2; row++) {
+        String selected = preferences.getString(CAMPAIGN_SKIN_KEY, "archer_trail_f");
+        if (!selected.startsWith("archer_trail_")) selected = "archer_trail_f";
+        for (int row = 0; row < (CAMPAIGN_SKINS.length + 1) / 2; row++) {
             LinearLayout options = new LinearLayout(this); options.setGravity(Gravity.CENTER_VERTICAL);
             LinearLayout.LayoutParams rowLp = params(-1, -2); rowLp.topMargin = dp(8); card.addView(options, rowLp);
-            for (int col = 0; col < 3; col++) {
-                String[] skin = CAMPAIGN_SKINS[row * 3 + col];
+            for (int col = 0; col < 2; col++) {
+                int index = row * 2 + col; if (index >= CAMPAIGN_SKINS.length) break;
+                String[] skin = CAMPAIGN_SKINS[index];
                 boolean active = skin[0].equals(selected);
                 LinearLayout choice = new LinearLayout(this); choice.setOrientation(LinearLayout.VERTICAL); choice.setGravity(Gravity.CENTER);
                 choice.setPadding(dp(3), dp(6), dp(3), dp(6));
                 choice.setBackground(round(active ? (dark ? "#34304D" : "#EEEFFF") : (dark ? "#242532" : "#F5F6FA"), 12));
-                ImageView portrait = campaignSkinPreview(skin[0]); choice.addView(portrait, new LinearLayout.LayoutParams(dp(54), dp(54)));
+                ImageView portrait = campaignSkinPreview(skin[3]); choice.addView(portrait, new LinearLayout.LayoutParams(dp(96), dp(144)));
                 TextView label = text(skin[2] + (active ? " ✓" : ""), 11, active ? colorPrimary() : colorText(), active);
                 LinearLayout.LayoutParams labelLp = params(-1, -2); labelLp.topMargin = dp(4); choice.addView(label, labelLp); label.setGravity(Gravity.CENTER);
                 LinearLayout.LayoutParams choiceLp = new LinearLayout.LayoutParams(0, -2, 1); choiceLp.setMargins(dp(3), 0, dp(3), 0); options.addView(choice, choiceLp);
@@ -600,12 +602,12 @@ public class MainActivity extends Activity {
         }
     }
 
-    private ImageView campaignSkinPreview(String id) {
+    private ImageView campaignSkinPreview(String assetName) {
         ImageView image = new ImageView(this);
         image.setScaleType(ImageView.ScaleType.CENTER_CROP);
         image.setBackground(round(dark ? "#161927" : "#DDE4F0", 12));
         image.setClipToOutline(true);
-        try (InputStream input = getAssets().open("botcraft/skin-" + id + ".jpg")) { image.setImageBitmap(BitmapFactory.decodeStream(input)); }
+        try (InputStream input = getAssets().open("botcraft/" + assetName)) { image.setImageBitmap(BitmapFactory.decodeStream(input)); }
         catch (Exception ignored) { }
         return image;
     }
