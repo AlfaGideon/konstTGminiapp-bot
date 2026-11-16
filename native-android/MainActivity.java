@@ -50,6 +50,7 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -114,6 +115,7 @@ public class MainActivity extends Activity {
     private TextView updateStatus;
     private int activeTab = TAB_HOME;
     private String screen = "home";
+    private String adminReturnScreen = "home";
     private String selectedTemplate = "start";
     private String editingId = "";
     private String themeChoice = "system";
@@ -153,7 +155,8 @@ public class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
-        if ("admin".equals(screen)) screen = "editor";
+        if (screen.startsWith("admin_")) screen = "admin";
+        else if ("admin".equals(screen)) { screen = adminReturnScreen; if ("settings".equals(screen)) activeTab = TAB_SETTINGS; else if ("home".equals(screen)) activeTab = TAB_HOME; }
         else if ("editor".equals(screen)) { screen = "projects"; activeTab = TAB_PROJECTS; }
         else if ("builder".equals(screen)) { screen = "home"; activeTab = TAB_HOME; }
         else if (!"home".equals(screen)) { screen = "home"; activeTab = TAB_HOME; }
@@ -205,6 +208,11 @@ public class MainActivity extends Activity {
         if ("builder".equals(screen)) renderBuilder();
         else if ("editor".equals(screen)) renderEditor();
         else if ("admin".equals(screen)) renderAdmin();
+        else if ("admin_bot".equals(screen)) renderAdminBot();
+        else if ("admin_players".equals(screen)) renderAdminPlayers();
+        else if ("admin_map".equals(screen)) renderAdminMap();
+        else if ("admin_skins".equals(screen)) renderAdminSkins();
+        else if ("admin_economy".equals(screen)) renderAdminEconomy();
         else if (activeTab == TAB_TEMPLATES) renderTemplates();
         else if (activeTab == TAB_PROJECTS) renderProjects();
         else if (activeTab == TAB_SETTINGS) renderSettings();
@@ -871,7 +879,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams b = new LinearLayout.LayoutParams(0, dp(46), 1); b.setMargins(dp(7), dp(14), 0, 0); controls.addView(admin, b);
         page.addView(controls);
         add.setOnClickListener(v -> showNodeLibrary());
-        admin.setOnClickListener(v -> { screen = "admin"; render(); });
+        admin.setOnClickListener(v -> { adminReturnScreen = "editor"; screen = "admin"; render(); });
         TextView graphHeading = text("ЦЕПОЧКА СЦЕНАРИЯ", 11, colorPrimary(), true);
         LinearLayout.LayoutParams gh = params(-1, -2); gh.topMargin = dp(22); page.addView(graphHeading, gh);
         for (int i = 0; i < nodes.length(); i++) {
@@ -917,9 +925,9 @@ public class MainActivity extends Activity {
                 page.addView(arrow, params(-1, 28));
             }
         }
-        TextView botSetup = actionButton("Настроить Telegram-бота в APK", true);
+        TextView botSetup = actionButton("Открыть панель администратора", true);
         LinearLayout.LayoutParams xp = params(-1, 50); xp.topMargin = dp(18); page.addView(botSetup, xp);
-        botSetup.setOnClickListener(v -> { screen = "admin"; render(); });
+        botSetup.setOnClickListener(v -> { adminReturnScreen = "editor"; screen = "admin"; render(); });
         TextView backendNote = text("Управление миром остаётся в APK. Чтобы игроки запускали Mini App через Telegram, нужен публичный HTTPS-адрес игры и обработчик событий бота; токен сам по себе не публикует данные с телефона.", 12, colorMuted(), false);
         LinearLayout.LayoutParams bn = params(-1, -2); bn.topMargin = dp(10); page.addView(backendNote, bn);
     }
@@ -1197,17 +1205,102 @@ public class MainActivity extends Activity {
     }
 
     private void renderAdmin() {
-        JSONObject project = findProject(editingId); if (project == null) { screen = "projects"; return; }
-        addBrandHeader("Администрирование", "ЛОКАЛЬНЫЙ МИР"); addSpace(12);
-        addBotConnectionCard();
-        addSectionTitle("Параметры мира", "Настройки выбранного проекта");
-        TextView intro = text("Токен бота хранится отдельно и шифруется ключом Android Keystore; в данные игрового мира он не попадает.", 13, colorMuted(), false); LinearLayout.LayoutParams il = params(-1, -2); il.topMargin = dp(5); page.addView(intro, il);
-        LinearLayout card = cardColumn(); LinearLayout.LayoutParams cl = params(-1, -2); cl.topMargin = dp(14); page.addView(card, cl);
-        card.addView(text("Название мира", 14, colorText(), true)); EditText name = editText("Название"); name.setText(project.optString("name", "")); LinearLayout.LayoutParams nl = params(-1, 50); nl.topMargin = dp(7); card.addView(name, nl);
-        TextView save = actionButton("Сохранить параметры", true); LinearLayout.LayoutParams sl = params(-1, 46); sl.topMargin = dp(12); card.addView(save, sl);
-        save.setOnClickListener(v -> { String value = name.getText().toString().trim(); if (value.isEmpty()) { name.setError("Укажи название"); return; } try { project.put("name", value); } catch (Exception ignored) { } touchProject(project); Toast.makeText(this, "Настройки мира сохранены", Toast.LENGTH_SHORT).show(); screen = "editor"; render(); });
-        TextView technical = text("Игроки: пока локальный прототип без общей базы. Для постоянного прогресса и мультиплеера подключи backend и проверку Telegram initData на сервере.", 13, colorMuted(), false); LinearLayout.LayoutParams tp = params(-1, -2); tp.topMargin = dp(16); page.addView(technical, tp);
-        TextView back = actionButton("Назад в конструктор", false); LinearLayout.LayoutParams bl = params(-1, 46); bl.topMargin = dp(16); page.addView(back, bl); back.setOnClickListener(v -> { screen = "editor"; render(); });
+        JSONObject project = findProject(editingId); if (project == null) { screen = adminReturnScreen; return; }
+        JSONArray nodes = worldNodes(project);
+        JSONObject grid = project.optJSONObject("grid"); JSONArray events = project.optJSONArray("worldEvents");
+        addBrandHeader("Панель администратора", "УПРАВЛЕНИЕ МИРОМ"); addSpace(12);
+        page.addView(text(project.optString("name", "Без названия"), 23, colorText(), true));
+        TextView summary = text("Ваш мир · " + nodes.length() + " сюжетных узлов · " + (events == null ? 0 : events.length()) + " клеточных точек", 13, colorMuted(), false);
+        LinearLayout.LayoutParams summaryLp=params(-1,-2); summaryLp.topMargin=dp(5); page.addView(summary,summaryLp);
+        addSectionTitle("Разделы управления", "Выбери, что настроить");
+        addAdminMenuCard("🤖", "Telegram-бот", "Подключение, запуск polling и диагностика", () -> { adminReturnScreen="admin"; screen="admin_bot"; render(); });
+        addAdminMenuCard("🗺️", "Мир и карта", "Название, карта 100 × 100, события и экспорт", () -> { screen="admin_map"; render(); });
+        addAdminMenuCard("👥", "Игроки", "Игроки бота на этом устройстве, прогресс и сброс", () -> { screen="admin_players"; render(); });
+        addAdminMenuCard("🏹", "Облики и награды", "Доступные образы лучника и игровые награды", () -> { screen="admin_skins"; render(); });
+        addAdminMenuCard("🪙", "Экономика", "Баланс и техническая готовность платежей", () -> { screen="admin_economy"; render(); });
+        TextView editor = actionButton("Вернуться в конструктор мира", false); LinearLayout.LayoutParams ep=params(-1,46); ep.topMargin=dp(12); page.addView(editor,ep);
+        editor.setOnClickListener(v -> { screen=adminReturnScreen.equals("admin") ? "editor" : adminReturnScreen; render(); });
+    }
+
+    private void addAdminMenuCard(String emoji, String title, String description, Runnable onClick) {
+        LinearLayout card=cardColumn(); LinearLayout.LayoutParams cp=params(-1,-2); cp.topMargin=dp(9); page.addView(card,cp);
+        TextView heading=text(emoji+"   "+title+"     ›",17,colorText(),true); card.addView(heading);
+        TextView detail=text(description,12,colorMuted(),false); LinearLayout.LayoutParams dp1=params(-1,-2); dp1.topMargin=dp(4); card.addView(detail,dp1);
+        card.setOnClickListener(v -> onClick.run()); card.setFocusable(true);
+    }
+
+    private void adminBack(String title, String subtitle) {
+        addBrandHeader(title, subtitle); TextView back=actionButton("← Панель администратора",false);
+        LinearLayout.LayoutParams lp=params(-1,42); lp.topMargin=dp(8); page.addView(back,lp);
+        back.setOnClickListener(v -> { screen="admin"; render(); });
+    }
+
+    private void renderAdminBot() {
+        addBrandHeader("Telegram-бот", "ПОДКЛЮЧЕНИЕ И ДИАГНОСТИКА");
+        TextView back=actionButton("← Панель администратора",false); LinearLayout.LayoutParams bp=params(-1,42); bp.topMargin=dp(8); page.addView(back,bp);
+        back.setOnClickListener(v->{screen="admin";render();}); addBotConnectionCard();
+        LinearLayout info=cardColumn(); LinearLayout.LayoutParams ip=params(-1,-2); ip.topMargin=dp(10); page.addView(info,ip);
+        info.addView(text("Состояние хранилища",15,colorText(),true));
+        info.addView(text("Токен шифруется Android Keystore на этом устройстве. Long polling работает, пока Android разрешает фоновую работу и есть сеть; закрытый APK не заменяет публичный сервер Mini App.",12,colorMuted(),false));
+    }
+
+    private void renderAdminPlayers() {
+        adminBack("Игроки", "ЛОКАЛЬНЫЕ ДАННЫЕ БОТА"); addSpace(10);
+        JSONObject all=readPlayerStates(); Iterator<String> ids=all.keys(); int count=all.length();
+        addSectionTitle("Сохранения на этом устройстве", count+" игроков · не синхронизируются между телефонами");
+        if(count==0) {
+            LinearLayout empty=cardColumn(); empty.addView(text("Пока нет игроков",16,colorText(),true));
+            empty.addView(text("Игроки появятся здесь после запуска бота и первого сообщения ему. Данные хранятся только на телефоне, где работает APK.",12,colorMuted(),false)); page.addView(empty);
+        }
+        while(ids.hasNext()) {
+            String id=ids.next(); JSONObject player=all.optJSONObject(id); if(player==null) continue;
+            LinearLayout card=cardColumn(); LinearLayout.LayoutParams cp=params(-1,-2); cp.topMargin=dp(8); page.addView(card,cp);
+            card.addView(text(player.optString("firstName", "Игрок")+" · Telegram ID "+id,14,colorText(),true));
+            card.addView(text("Уровень "+player.optInt("level",1)+" · ❤️ "+player.optInt("hp",0)+" · 🪙 "+player.optInt("gold",0)+" · "+player.optString("currentRegion","—"),12,colorMuted(),false));
+            TextView reset=actionButton("Сбросить прогресс игрока",false); LinearLayout.LayoutParams rp=params(-1,42); rp.topMargin=dp(8); card.addView(reset,rp);
+            reset.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Сбросить прогресс?").setMessage("Данные игрока "+id+" будут удалены с этого устройства.").setNegativeButton("Отмена",null).setPositiveButton("Сбросить",(d,w)->{ JSONObject latest=readPlayerStates(); latest.remove(id); writePlayerStates(latest); render(); }).show());
+        }
+        if(count>0) { TextView clear=actionButton("Удалить сохранения всех игроков",false); LinearLayout.LayoutParams cp=params(-1,46); cp.topMargin=dp(12); page.addView(clear,cp);
+            clear.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Удалить все сохранения?").setMessage("Это действие удалит локальный прогресс всех игроков на этом телефоне.").setNegativeButton("Отмена",null).setPositiveButton("Удалить",(d,w)->{writePlayerStates(new JSONObject());render();}).show()); }
+        TextView warning=text("Для общей админки с удалённым списком игроков, банами и синхронизацией потребуется серверная база и проверка прав администратора. APK не может управлять данными на чужих устройствах.",12,colorMuted(),false); LinearLayout.LayoutParams wp=params(-1,-2); wp.topMargin=dp(14); page.addView(warning,wp);
+    }
+
+    private JSONObject readPlayerStates() { try { return new JSONObject(preferences.getString("telegram_player_states","{}")); } catch(Exception e) { return new JSONObject(); } }
+    private void writePlayerStates(JSONObject players) { preferences.edit().putString("telegram_player_states",players.toString()).apply(); }
+
+    private void renderAdminMap() {
+        adminBack("Мир и карта", "НАСТРОЙКИ КАМПАНИИ"); JSONObject project=findProject(editingId); if(project==null)return;
+        addSectionTitle("Общие параметры", "Сохраняются в выбранном локальном проекте");
+        LinearLayout card=cardColumn(); page.addView(card); EditText name=editText("Название мира"); name.setText(project.optString("name","")); card.addView(name,params(-1,50));
+        card.addView(text("Карта игры отображается как графическая область 7 × 7 вокруг героя; перемещение выполняется стрелками. Полный мир содержит 100 × 100 координат.",12,colorMuted(),false));
+        JSONArray events=project.optJSONArray("worldEvents"); JSONArray nodes=worldNodes(project);
+        LinearLayout stats=cardColumn(); LinearLayout.LayoutParams sp=params(-1,-2); sp.topMargin=dp(10); page.addView(stats,sp);
+        stats.addView(text("Сюжетных узлов: "+nodes.length(),14,colorText(),true)); stats.addView(text("Клеточных точек интереса: "+(events==null?0:events.length()),14,colorText(),true)); stats.addView(text("Клеточная сетка: "+(project.optJSONObject("grid") == null ? "не настроена" : "готова"),14,colorText(),true));
+        TextView save=actionButton("Сохранить название",true); LinearLayout.LayoutParams sl=params(-1,46); sl.topMargin=dp(10); page.addView(save,sl);
+        save.setOnClickListener(v->{String value=name.getText().toString().trim();if(value.isEmpty()){name.setError("Укажи название");return;}try{project.put("name",value);}catch(Exception ignored){}touchProject(project);Toast.makeText(this,"Название мира сохранено",Toast.LENGTH_SHORT).show();render();});
+        TextView export=actionButton("Поделиться резервной копией мира",false); LinearLayout.LayoutParams el=params(-1,46); el.topMargin=dp(8); page.addView(export,el);
+        export.setOnClickListener(v->{Intent send=new Intent(Intent.ACTION_SEND);send.setType("application/json");send.putExtra(Intent.EXTRA_SUBJECT,"Резервная копия · "+project.optString("name"));send.putExtra(Intent.EXTRA_TEXT,project.toString());startActivity(Intent.createChooser(send,"Экспортировать мир"));});
+        TextView warning=text("Экспорт передаст сценарий выбранному приложению через системное меню Android. Секретный токен бота в файл мира не включается.",12,colorMuted(),false); LinearLayout.LayoutParams wl=params(-1,-2);wl.topMargin=dp(10);page.addView(warning,wl);
+    }
+
+    private void renderAdminSkins() {
+        adminBack("Облики и награды", "КОЛЛЕКЦИЯ ЛУЧНИКА"); addSpace(10);
+        String[][] skins={{"archer-free-female.png","Странница · женский","Стартовый облик"},{"archer-free-male.jpg","Следопыт · мужской","Стартовый облик"},{"archer-frost-female.png","Иней · женский","Сюжетное открытие"},{"archer-frost-male.jpg","Иней · мужской","Сюжетное открытие"},{"archer-gold-female.jpg","Золотой рассвет · женский","Игровая валюта"},{"archer-gold-male.png","Золотой рассвет · мужской","Игровая валюта"},{"archer-starfall-female.gif","Звездопад · женский","Telegram Stars · GIF"},{"archer-starfall-male.gif","Звездопад · мужской","Telegram Stars · GIF"}};
+        addSectionTitle("Доступные образы", "Внешность не меняет класс или характеристики");
+        for(String[] skin:skins){LinearLayout card=cardColumn();LinearLayout.LayoutParams cp=params(-1,-2);cp.topMargin=dp(7);page.addView(card,cp);card.addView(text("🏹  "+skin[1],14,colorText(),true));card.addView(text(skin[2]+" · "+skin[0],11,colorMuted(),false));}
+        TextView note=text("Сюжетные открытия и локальный прогресс доступны в этом прототипе. Реальное выставление цен/покупок и Telegram Stars требует серверной валидации платежей; APK не может безопасно подтверждать платежи самостоятельно.",12,colorMuted(),false);LinearLayout.LayoutParams np=params(-1,-2);np.topMargin=dp(12);page.addView(note,np);
+    }
+
+    private void renderAdminEconomy() {
+        adminBack("Экономика", "ВАЛЮТА И ПЛАТЕЖИ"); addSpace(10);
+        addSectionTitle("Настройки и контроль", "Инструменты локального прототипа");
+        LinearLayout card=cardColumn();page.addView(card);
+        card.addView(text("🪙 Золотые монеты",16,colorText(),true));
+        card.addView(text("Баланс игроков хранится локально на устройстве, где запущен бот. Цены и начисления обрабатываются игровыми сценариями; общей таблицы транзакций сейчас нет.",13,colorMuted(),false));
+        LinearLayout stars=cardColumn();LinearLayout.LayoutParams lp=params(-1,-2);lp.topMargin=dp(10);page.addView(stars,lp);
+        stars.addView(text("⭐ Telegram Stars",16,colorText(),true));stars.addView(text("Stars-покупки нельзя подтверждать только на телефоне. Для безопасной оплаты требуется сервер, который проверяет Telegram pre_checkout_query и успешное событие платежа.",13,colorMuted(),false));
+        TextView status=actionButton("Проверить подключение бота",true);LinearLayout.LayoutParams sp=params(-1,46);sp.topMargin=dp(12);page.addView(status,sp);
+        status.setOnClickListener(v->{adminReturnScreen="admin";screen="admin_bot";render();});
     }
 
     private void addFeatureLine(LinearLayout target, String title, String description) {

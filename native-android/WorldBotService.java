@@ -6,6 +6,14 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
+import android.graphics.Typeface;
 import android.os.Build;
 import android.os.IBinder;
 import android.util.Base64;
@@ -15,6 +23,9 @@ import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -623,56 +634,32 @@ public final class WorldBotService extends Service {
         String skinUnlockNotice = newRegion ? unlockSkinsForRegion(player, regionId) : "";
         try { player.put("gridX", x); player.put("gridY", y); player.put("currentRegion", regionId); player.put("currentMode", "world"); savePlayer(chatId, player); } catch (Exception ignored) { }
 
-        StringBuilder text = new StringBuilder("МИРОВАЯ КАРТА · 100 × 100\n");
-        text.append("Область: ").append(region == null ? regionId : region.optString("title"));
-        text.append(" · координаты ").append(x).append(", ").append(y);
-        text.append("\nНажми соседнюю клетку или стрелку, чтобы сделать один шаг. Диагоналей нет.");
-        text.append("\n🔒 — непроходимая клетка. Исследуй доступные точки интереса.");
-        if (newRegion) text.append("\nНовая область открыта.");
-        if (!skinUnlockNotice.isEmpty()) text.append("\n\n").append(skinUnlockNotice);
-        if (!notice.isEmpty()) text.append("\n\n").append(notice);
+        StringBuilder text = new StringBuilder("МИРОВАЯ КАРТА 100 × 100 · ");
+        text.append(region == null ? regionId : region.optString("title"));
+        text.append(" · (").append(x).append(", ").append(y).append(") · ❤️ ").append(player.optInt("hp", 12)).append("/").append(player.optInt("maxHp", 12));
+        text.append(" · 🪙 ").append(player.optInt("gold", 0));
+        if (newRegion) text.append(" · новая область");
+        if (!skinUnlockNotice.isEmpty()) text.append(" · сюжетный облик открыт");
         JSONObject here = eventAt(world, x, y);
         boolean eventAvailable = here != null && !contains(player.optJSONArray("resolvedGridEvents"), here.optString("id", ""));
-        if (eventAvailable) text.append("\n\nНа этой клетке есть событие: ").append(here.optString("title", "Точка интереса"));
-        text.append("\n\n").append(playerSummary(player));
+        if (eventAvailable) text.append(" · точка интереса: ").append(here.optString("title", "событие"));
+        if (!notice.isEmpty()) text.append(" · ").append(notice);
 
+        String imageName = renderGridMapImage(chatId, world, player, x, y);
         JSONArray keyboard = new JSONArray();
         try {
-            int startX = x - 4, startY = y - 4;
-            for (int rowIndex = 0; rowIndex < 10; rowIndex++) {
-                JSONArray row = new JSONArray();
-                for (int column = 0; column < 10; column++) {
-                    int cx = startX + column, cy = startY + rowIndex;
-                    String label, callback;
-                    if (cx < 0 || cx >= 100 || cy < 0 || cy >= 100) {
-                        label = "⬛"; callback = "grid:void";
-                    } else if (!isGridCellAccessible(cx, cy)) {
-                        label = "🔒"; callback = "grid:void";
-                    } else if (cx == x && cy == y) {
-                        label = "🧍"; callback = "grid:interact";
-                    } else {
-                        JSONObject event = eventAt(world, cx, cy);
-                        label = event != null && !contains(player.optJSONArray("resolvedGridEvents"), event.optString("id", ""))
-                            ? eventSymbol(event) : regionSymbol(regionForGrid(cx, cy));
-                        callback = "grid:cell:" + cx + ":" + cy;
-                    }
-                    addInlineButton(row, label, callback);
-                }
-                keyboard.put(row);
-            }
-            JSONArray directions = new JSONArray();
-            addInlineButton(directions, "⬆️", "grid:move:up");
-            addInlineButton(directions, "⬅️", "grid:move:left");
-            addInlineButton(directions, eventAvailable ? "🔎 Изучить" : "📍 Здесь", eventAvailable ? "grid:interact" : "grid:stay");
-            addInlineButton(directions, "➡️", "grid:move:right");
-            addInlineButton(directions, "⬇️", "grid:move:down");
-            keyboard.put(directions);
+            addButtonRow(keyboard, "⬆️", "grid:move:up");
+            JSONArray middle = new JSONArray();
+            addInlineButton(middle, "⬅️", "grid:move:left");
+            addInlineButton(middle, eventAvailable ? "🔎 Исследовать" : "📍 Здесь", eventAvailable ? "grid:interact" : "grid:stay");
+            addInlineButton(middle, "➡️", "grid:move:right"); keyboard.put(middle);
+            addButtonRow(keyboard, "⬇️", "grid:move:down");
             if (!"harbor".equals(regionId)) addButtonRow(keyboard, "⚔️ Охотиться в этой зоне", "grid:hunt");
             addButtonRow(keyboard, "📜 Задания", "ow:quests");
             addButtonRow(keyboard, "👤 Герой и экипировка", "ow:character");
             addButtonRow(keyboard, "🎒 Рюкзак", "ow:inventory");
         } catch (Exception ignored) { }
-        sendPage(token, chatId, text.toString(), keyboard, null);
+        sendPage(token, chatId, text.toString(), keyboard, imageName);
     }
 
     private boolean isGridCellAccessible(int x, int y) {
@@ -680,6 +667,108 @@ public final class WorldBotService extends Service {
         int localX = x % 10, localY = y % 10;
         return !(localX == 4 && localY >= 3 && localY <= 6)
             && !(localX == 5 && (localY == 3 || localY == 6));
+    }
+
+    private String renderGridMapImage(long chatId, JSONObject world, JSONObject player, int centerX, int centerY) {
+        final int size = 640, tile = 80, margin = 40;
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        canvas.drawColor(Color.rgb(14, 23, 34));
+        RectF frame = new RectF(12, 12, size - 12, size - 12);
+        paint.setColor(Color.rgb(25, 40, 48)); canvas.drawRoundRect(frame, 30, 30, paint);
+        for (int row = 0; row < 7; row++) for (int col = 0; col < 7; col++) {
+            int wx = centerX + col - 3, wy = centerY + row - 3;
+            float left = margin + col * tile, top = margin + row * tile;
+            RectF cell = new RectF(left + 2, top + 2, left + tile - 2, top + tile - 2);
+            if (wx < 0 || wx >= 100 || wy < 0 || wy >= 100) {
+                paint.setColor(Color.rgb(30, 49, 62)); canvas.drawRoundRect(cell, 9, 9, paint);
+                paint.setColor(Color.rgb(38, 62, 74)); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.5f); canvas.drawRoundRect(cell, 9, 9, paint); paint.setStyle(Paint.Style.FILL);
+                continue;
+            }
+            drawMapTile(canvas, cell, wx, wy, world, player, paint);
+        }
+        float centerLeft = margin + 3 * tile, centerTop = margin + 3 * tile;
+        JSONObject currentEvent = eventAt(world, centerX, centerY);
+        if (currentEvent != null && !contains(player.optJSONArray("resolvedGridEvents"), currentEvent.optString("id", ""))) {
+            drawPoiMarker(canvas, centerLeft + tile - 15, centerTop + 15, currentEvent.optString("kind", "mystery"), paint);
+        }
+        paint.setColor(Color.argb(110, 0, 0, 0)); canvas.drawOval(new RectF(centerLeft + 14, centerTop + 60, centerLeft + 66, centerTop + 76), paint);
+        paint.setColor(Color.rgb(255, 218, 126)); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(2.5f);
+        canvas.drawCircle(centerLeft + tile / 2f, centerTop + tile / 2f, 34, paint); paint.setStyle(Paint.Style.FILL);
+        Bitmap hero = null;
+        try { byte[] bytes = readAsset(skinImageName(player.optString("skin", "archer_trail_f"))); hero = BitmapFactory.decodeByteArray(bytes, 0, bytes.length); } catch (Exception ignored) { }
+        if (hero != null) {
+            RectF destination = new RectF(centerLeft + 19, centerTop + 6, centerLeft + 61, centerTop + 70);
+            canvas.drawBitmap(hero, null, destination, paint); hero.recycle();
+        } else {
+            paint.setColor(Color.rgb(235, 226, 204)); canvas.drawCircle(centerLeft + 40, centerTop + 28, 9, paint);
+            paint.setColor(Color.rgb(75, 104, 77)); canvas.drawRoundRect(new RectF(centerLeft + 26, centerTop + 36, centerLeft + 54, centerTop + 68), 9, 9, paint);
+        }
+        paint.setColor(Color.argb(55, 202, 232, 248)); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1);
+        canvas.drawRoundRect(frame, 30, 30, paint); paint.setStyle(Paint.Style.FILL);
+        String fileName = "grid-map-" + (chatId < 0 ? "m" + (-chatId) : Long.toString(chatId)) + ".png";
+        try (FileOutputStream output = new FileOutputStream(new File(getCacheDir(), fileName))) {
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, output); output.flush(); bitmap.recycle(); return fileName;
+        } catch (Exception ignored) { bitmap.recycle(); return MAP_IMAGE; }
+    }
+
+    private void drawMapTile(Canvas canvas, RectF rect, int x, int y, JSONObject world, JSONObject player, Paint paint) {
+        String region = regionForGrid(x, y);
+        paint.setColor(mapGroundColor(region)); canvas.drawRoundRect(rect, 9, 9, paint);
+        float left = rect.left, top = rect.top, w = rect.width(), h = rect.height();
+        int seed = Math.abs(x * 92821 + y * 68917 + x * y * 37);
+        paint.setColor(Color.argb(30, 238, 244, 222));
+        for (int i = 0; i < 4; i++) {
+            float sx = left + 8 + ((seed >> (i * 3)) & 55), sy = top + 8 + ((seed >> (i * 4 + 2)) & 55);
+            canvas.drawCircle(sx, sy, 1.6f + (i % 2), paint);
+        }
+        if (isGridCellAccessible(x, y)) {
+            paint.setColor(Color.argb(55, 242, 213, 151)); paint.setStrokeWidth(3); paint.setStrokeCap(Paint.Cap.ROUND);
+            float cx = left + w / 2, cy = top + h / 2;
+            if (((x + y) & 1) == 0 && x < 99 && isGridCellAccessible(x + 1, y)) canvas.drawLine(cx, cy, left + w, cy + 5, paint);
+            if (((x + 2 * y) % 3) != 0 && y < 99 && isGridCellAccessible(x, y + 1)) canvas.drawLine(cx - 4, cy, cx + 5, top + h, paint);
+            paint.setStrokeCap(Paint.Cap.BUTT);
+        } else {
+            paint.setColor(Color.rgb(48, 65, 77)); canvas.drawRoundRect(new RectF(left + 4, top + 4, left + w - 4, top + h - 4), 10, 10, paint);
+            paint.setColor(Color.rgb(103, 117, 122));
+            canvas.drawCircle(left + 28, top + 34, 15, paint); canvas.drawCircle(left + 48, top + 29, 19, paint); canvas.drawCircle(left + 55, top + 49, 13, paint);
+            paint.setColor(Color.rgb(138, 148, 146)); canvas.drawCircle(left + 43, top + 31, 10, paint); canvas.drawCircle(left + 24, top + 37, 8, paint);
+        }
+        JSONObject event = eventAt(world, x, y);
+        if (event != null && !contains(player.optJSONArray("resolvedGridEvents"), event.optString("id", ""))) {
+            drawPoiMarker(canvas, rect.centerX(), rect.centerY(), event.optString("kind", "mystery"), paint);
+        } else if (!isGridCellAccessible(x, y)) {
+            paint.setColor(Color.argb(170, 232, 238, 230)); paint.setTextSize(14); paint.setTypeface(Typeface.DEFAULT_BOLD);
+            canvas.drawText("×", rect.centerX() - 5, rect.centerY() + 5, paint);
+        }
+        paint.setColor(Color.argb(45, 17, 27, 29)); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.2f);
+        canvas.drawRoundRect(rect, 9, 9, paint); paint.setStyle(Paint.Style.FILL);
+    }
+
+    private int mapGroundColor(String region) {
+        switch (region) {
+            case "harbor": return Color.rgb(155, 143, 103); case "forest": return Color.rgb(57, 99, 67);
+            case "village": return Color.rgb(113, 132, 139); case "shipwreck": return Color.rgb(66, 105, 122);
+            case "mine": return Color.rgb(95, 82, 69); case "crystal_cave": return Color.rgb(83, 80, 124);
+            case "wolf_cliffs": return Color.rgb(99, 112, 101); case "watchtower": return Color.rgb(133, 129, 93);
+            case "lighthouse": return Color.rgb(70, 119, 120); case "high_pass": return Color.rgb(142, 171, 183);
+            case "observatory": return Color.rgb(61, 74, 111); case "storm_isle": return Color.rgb(59, 72, 93);
+            case "heart_peak": return Color.rgb(107, 75, 76); default: return Color.rgb(74, 104, 83);
+        }
+    }
+
+    private void drawPoiMarker(Canvas canvas, float cx, float cy, String kind, Paint paint) {
+        int color = "mob".equals(kind) ? Color.rgb(164, 61, 54) : "npc".equals(kind) ? Color.rgb(223, 176, 82)
+            : "cache".equals(kind) ? Color.rgb(181, 124, 50) : "shrine".equals(kind) ? Color.rgb(156, 127, 219) : Color.rgb(90, 182, 199);
+        paint.setColor(Color.argb(215, 20, 27, 33)); canvas.drawCircle(cx, cy, 15, paint);
+        paint.setColor(color); canvas.drawCircle(cx, cy, 12, paint);
+        paint.setColor(Color.rgb(246, 241, 224)); paint.setStrokeWidth(2.4f); paint.setStrokeCap(Paint.Cap.ROUND); paint.setStyle(Paint.Style.STROKE);
+        if ("mob".equals(kind)) { canvas.drawLine(cx - 6, cy + 6, cx + 5, cy - 5, paint); canvas.drawLine(cx - 6, cy - 5, cx + 5, cy + 6, paint); }
+        else if ("npc".equals(kind)) { paint.setStyle(Paint.Style.FILL); canvas.drawCircle(cx, cy - 4, 3, paint); canvas.drawRoundRect(new RectF(cx - 3, cy, cx + 3, cy + 7), 2, 2, paint); }
+        else if ("cache".equals(kind)) { paint.setStyle(Paint.Style.FILL); canvas.drawRect(cx - 6, cy - 3, cx + 6, cy + 6, paint); paint.setColor(color); canvas.drawRect(cx - 1, cy - 3, cx + 1, cy + 6, paint); }
+        else { Path diamond = new Path(); diamond.moveTo(cx, cy - 7); diamond.lineTo(cx + 6, cy); diamond.lineTo(cx, cy + 7); diamond.lineTo(cx - 6, cy); diamond.close(); canvas.drawPath(diamond, paint); }
+        paint.setStyle(Paint.Style.FILL); paint.setStrokeCap(Paint.Cap.BUTT);
     }
 
     private void addInlineButton(JSONArray row, String label, String data) throws Exception {
@@ -1534,7 +1623,9 @@ public final class WorldBotService extends Service {
 
     private byte[] readAsset(String assetName) throws Exception {
         if (assetName == null || !assetName.matches("[A-Za-z0-9._-]+")) throw new IllegalArgumentException("Invalid image asset name");
-        try (InputStream input = getAssets().open("botcraft/" + assetName); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+        InputStream source = assetName.matches("grid-map-(?:m)?[0-9]+\\.png")
+            ? new FileInputStream(new File(getCacheDir(), assetName)) : getAssets().open("botcraft/" + assetName);
+        try (InputStream input = source; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[8192]; int count;
             while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
             return output.toByteArray();
@@ -1544,6 +1635,7 @@ public final class WorldBotService extends Service {
     private JSONObject sendPhoto(String token, JSONObject payload, String imageName) throws Exception {
         byte[] photo = readAsset(imageName);
         String boundary = "Botcraft" + System.nanoTime();
+        String mimeType = imageName.toLowerCase(Locale.ROOT).endsWith(".png") ? "image/png" : "image/jpeg";
         HttpURLConnection connection = (HttpURLConnection) new URL(api(token, "sendPhoto")).openConnection();
         try {
             connection.setRequestMethod("POST"); connection.setConnectTimeout(15000); connection.setReadTimeout(30000);
@@ -1553,7 +1645,7 @@ public final class WorldBotService extends Service {
                     if (!payload.has(field)) continue;
                     writeField(output, boundary, field, payload.optString(field, ""));
                 }
-                output.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"" + imageName + "\"\r\nContent-Type: image/jpeg\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                output.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"" + imageName + "\"\r\nContent-Type: " + mimeType + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
                 output.write(photo); output.write("\r\n".getBytes(StandardCharsets.UTF_8));
                 output.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
             }
@@ -1607,6 +1699,7 @@ public final class WorldBotService extends Service {
 
     private JSONObject editPhotoMessage(String token, long chatId, long messageId, String caption, JSONObject markup, String imageName) throws Exception {
         byte[] photo = readAsset(imageName);
+        String mimeType = imageName.toLowerCase(Locale.ROOT).endsWith(".png") ? "image/png" : "image/jpeg";
         JSONObject media = new JSONObject(); media.put("type", "photo"); media.put("media", "attach://photo"); media.put("caption", limit(caption, 1000));
         String boundary = "BotcraftEdit" + System.nanoTime();
         HttpURLConnection connection = (HttpURLConnection) new URL(api(token, "editMessageMedia")).openConnection();
@@ -1618,7 +1711,7 @@ public final class WorldBotService extends Service {
                 writeField(output, boundary, "message_id", Long.toString(messageId));
                 writeField(output, boundary, "media", media.toString());
                 if (markup != null) writeField(output, boundary, "reply_markup", markup.toString());
-                output.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"" + imageName + "\"\r\nContent-Type: image/jpeg\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                output.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"" + imageName + "\"\r\nContent-Type: " + mimeType + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
                 output.write(photo); output.write("\r\n".getBytes(StandardCharsets.UTF_8));
                 output.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
             }
