@@ -478,7 +478,9 @@ public final class WorldBotService extends Service {
             player.put("currentMode", "story");
             savePlayer(chatId, player);
         } catch (Exception ignored) { }
-        sendGamePage(token, chatId, limit(narrative.toString(), 1000), markup, MAP_IMAGE);
+        String sceneImage = node.optString("image", "");
+        if (sceneImage.isEmpty()) sceneImage = MAP_IMAGE;
+        sendGamePage(token, chatId, limit(narrative.toString(), 1000), markup, sceneImage);
     }
 
     private void addButtonRow(JSONArray keyboard, String label, String callbackData) throws Exception {
@@ -1906,9 +1908,14 @@ public final class WorldBotService extends Service {
     }
 
     private byte[] readAsset(String assetName) throws Exception {
-        if (assetName == null || !assetName.matches("[A-Za-z0-9._-]+")) throw new IllegalArgumentException("Invalid image asset name");
+        if (assetName == null) throw new IllegalArgumentException("Invalid image asset name");
         InputStream source;
-        if (assetName.matches("grid-map-(?:m)?[0-9]+-[0-9]+-[0-9]+-[0-9]+\\.png")) {
+        if (assetName.startsWith("node-images/")) {
+            String localName = assetName.substring("node-images/".length());
+            if (!localName.matches("[A-Za-z0-9._-]+")) throw new IllegalArgumentException("Invalid local image name");
+            source = new FileInputStream(new File(getFilesDir(), "node-images/" + localName));
+        } else if (!assetName.matches("[A-Za-z0-9._-]+")) throw new IllegalArgumentException("Invalid image asset name");
+        else if (assetName.matches("grid-map-(?:m)?[0-9]+-[0-9]+-[0-9]+-[0-9]+\\.png")) {
             int chatEnd = assetName.indexOf('-', 9);
             String chatToken = assetName.substring(9, chatEnd);
             source = new FileInputStream(new File(getCacheDir(), "grid-map-current-" + chatToken + ".png"));

@@ -48,6 +48,8 @@ import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -86,6 +88,7 @@ public class MainActivity extends Activity {
     private static final String BOT_TOKEN_KEY_ALIAS = "botcraft-telegram-token-v1";
     private static final int INSTALL_PERMISSION_REQUEST = 411;
     private static final int NOTIFICATION_PERMISSION_REQUEST = 412;
+    private static final int NODE_IMAGE_REQUEST = 413;
     private static final int TAB_HOME = 0;
     private static final int TAB_TEMPLATES = 1;
     private static final int TAB_PROJECTS = 2;
@@ -95,7 +98,9 @@ public class MainActivity extends Activity {
     private static final Template[] TEMPLATES = new Template[] {
         new Template("start", "Вход в мир", "Сценарий", "Стартовый узел: приветствие, выбор персонажа и первое действие игрока.", "Основа", "⌂"),
         new Template("dialogue", "Диалог", "Диалог", "Реплики NPC, варианты ответа и переход к следующему шагу.", "История", "…"),
-        new Template("npc", "NPC-персонаж", "Персонажи", "Имя, портрет-заглушка, характер и набор доступных реплик.", "Мир", "♙"),
+        new Template("illustration", "Иллюстрированная сцена", "Медиа", "Сюжетный экран с собственной PNG, JPEG или GIF-картинкой.", "История", "▧"),
+        new Template("ending", "Финал главы", "История", "Финальный экран главы с иллюстрацией и переходом к продолжению.", "История", "⚑"),
+        new Template("npc", "NPC-персонаж", "Персонажи", "Имя, портрет, характер, реплики и заменяемая иллюстрация.", "Мир", "♙"),
         new Template("choice", "Выбор игрока", "Логика", "Ветвление сюжета по выбору игрока или его параметрам.", "Алгоритм", "⑂"),
         new Template("quest", "Квест", "Задания", "Цели, этапы, условия завершения и награды за выполнение.", "Прогресс", "⚑"),
         new Template("shop", "Торговая площадка", "Экономика", "Каталог предметов, цены, валюта и действия покупки/продажи.", "Торговля", "¤"),
@@ -123,6 +128,10 @@ public class MainActivity extends Activity {
     private String adminReturnScreen = "home";
     private String selectedTemplate = "start";
     private String editingId = "";
+    private String selectedNodeId = "";
+    private String originalNodeImage = "";
+    private ImageView nodeImagePreview;
+    private TextView nodeImageStatus;
     private String themeChoice = "system";
     private boolean dark;
     private long pendingDownloadId = -1;
@@ -902,6 +911,9 @@ public class MainActivity extends Activity {
             TextView nt = text(node.optString("title", type.title), 16, colorText(), true); LinearLayout.LayoutParams ntp = params(-1, -2); ntp.topMargin = dp(2); meta.addView(nt, ntp);
             head.addView(meta, ml); card.addView(head);
             TextView body = text(node.optString("text", ""), 13, colorMuted(), false); LinearLayout.LayoutParams bodyLp = params(-1, -2); bodyLp.topMargin = dp(10); card.addView(body, bodyLp);
+            ImageView sceneImage = nodeImageView(node, dp(180));
+            if (sceneImage != null) { LinearLayout.LayoutParams imageLp = params(-1, dp(180)); imageLp.topMargin = dp(10); card.addView(sceneImage, imageLp); }
+            else if (!node.optString("image", "").isEmpty()) { TextView missingImage = text("▧  Изображение узла недоступно", 12, colorMuted(), false); LinearLayout.LayoutParams missingLp = params(-1, -2); missingLp.topMargin = dp(8); card.addView(missingImage, missingLp); }
             JSONArray choices = node.optJSONArray("choices");
             if (choices != null && choices.length() > 0) {
                 for (int c = 0; c < choices.length(); c++) {
@@ -921,7 +933,7 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(42), 1); lp.setMargins(dp(5), dp(10), 0, 0); actions.addView(link, lp);
             LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, dp(42), 1); rp.setMargins(dp(5), dp(10), 0, 0); actions.addView(remove, rp);
             card.addView(actions); edit.setOnClickListener(v -> editNode(project, nodeId)); link.setOnClickListener(v -> chooseNodeTarget(project, nodeId));
-            remove.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Удалить узел?").setMessage("Связи на этот узел станут пустыми.").setNegativeButton("Отмена", null).setPositiveButton("Удалить", (d, w) -> { deleteNode(project, nodeId); render(); }).show());
+            remove.setOnClickListener(v -> confirmNodeDelete(project, nodeId));
             LinearLayout.LayoutParams cardLp = params(-1, -2); cardLp.topMargin = dp(10); page.addView(card, cardLp);
             String nextId = node.optString("next", "");
             if (!nextId.isEmpty()) {
@@ -943,8 +955,23 @@ public class MainActivity extends Activity {
     }
 
     private void showNodeLibrary() {
-        String[] labels = new String[TEMPLATES.length]; for (int i = 0; i < TEMPLATES.length; i++) labels[i] = TEMPLATES[i].emoji + "  " + TEMPLATES[i].title;
-        new AlertDialog.Builder(this).setTitle("Добавить игровой блок").setItems(labels, (d, which) -> addWorldNode(TEMPLATES[which])).setNegativeButton("Отмена", null).show();
+        Dialog dialog = new Dialog(this);
+        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL);
+        TextView intro = text("Выбери блок, который добавит новый шаг или механику в сценарий.", 13, colorMuted(), false);
+        LinearLayout.LayoutParams introLp = params(-1, -2); introLp.bottomMargin = dp(10); content.addView(intro, introLp);
+        for (Template template : TEMPLATES) {
+            LinearLayout row = cardColumn(); row.setOrientation(LinearLayout.HORIZONTAL); row.setGravity(Gravity.CENTER_VERTICAL);
+            TextView icon = text(template.emoji, 22, colorPrimary(), true); icon.setGravity(Gravity.CENTER); icon.setBackground(round(dark ? "#30314C" : "#F0EFFF", 12));
+            row.addView(icon, new LinearLayout.LayoutParams(dp(46), dp(46)));
+            LinearLayout labels = new LinearLayout(this); labels.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams labelsLp = new LinearLayout.LayoutParams(0, -2, 1); labelsLp.setMargins(dp(10), 0, 0, 0);
+            labels.addView(text(template.title, 15, colorText(), true));
+            TextView description = text(template.description, 12, colorMuted(), false); LinearLayout.LayoutParams descLp = params(-1, -2); descLp.topMargin = dp(3); labels.addView(description, descLp);
+            row.addView(labels, labelsLp);
+            LinearLayout.LayoutParams rowLp = params(-1, -2); rowLp.bottomMargin = dp(8); content.addView(row, rowLp);
+            row.setOnClickListener(v -> { dialog.dismiss(); addWorldNode(template); });
+        }
+        showStudioDialog(dialog, "Добавить игровой блок", content, "Готово", dialog::dismiss, null, null);
     }
 
     private void addWorldNode(Template template) {
@@ -959,77 +986,170 @@ public class MainActivity extends Activity {
 
     private void editNode(JSONObject project, String nodeId) {
         JSONObject node = findNode(project, nodeId); if (node == null) return;
-        LinearLayout fields = new LinearLayout(this); fields.setOrientation(LinearLayout.VERTICAL); fields.setPadding(dp(8), dp(4), dp(8), 0);
-        EditText title = editText("Заголовок узла"); title.setText(node.optString("title", "")); fields.addView(title, params(-1, 50));
-        EditText body = editText("Текст сцены, условия или результата"); body.setSingleLine(false); body.setMinLines(3); body.setGravity(Gravity.TOP); body.setText(node.optString("text", "")); LinearLayout.LayoutParams bp = params(-1, 110); bp.topMargin = dp(8); fields.addView(body, bp);
-        EditText options = editText("Варианты по строкам; магазин: Зелье - 10 золота"); options.setSingleLine(false); options.setMinLines(2); options.setGravity(Gravity.TOP);
+        selectedNodeId = nodeId;
+        originalNodeImage = node.optString("image", "");
+        LinearLayout fields = new LinearLayout(this); fields.setOrientation(LinearLayout.VERTICAL);
+        fields.addView(fieldLabel("Заголовок"));
+        EditText title = editText("Название сцены"); title.setText(node.optString("title", "")); fields.addView(title, params(-1, 50));
+        fields.addView(fieldLabel("Текст сцены"));
+        EditText body = editText("Описание, диалог или результат"); body.setSingleLine(false); body.setMinLines(3); body.setGravity(Gravity.TOP); body.setText(node.optString("text", "")); LinearLayout.LayoutParams bp = params(-1, 108); fields.addView(body, bp);
+        fields.addView(fieldLabel("Иллюстрация"));
+        LinearLayout imageCard = cardColumn(); imageCard.setPadding(dp(10), dp(10), dp(10), dp(10));
+        nodeImagePreview = nodeImageView(node, dp(190));
+        String imagePath = node.optString("image", "");
+        nodeImageStatus = text(imagePath.isEmpty() ? "Изображение не выбрано" : nodeImagePreview == null ? "Изображение указано, но не удалось открыть файл" : "Текущее изображение сцены", 12, colorMuted(), false);
+        imageCard.addView(nodeImageStatus);
+        if (nodeImagePreview != null) { LinearLayout.LayoutParams previewLp = params(-1, dp(190)); previewLp.topMargin = dp(8); imageCard.addView(nodeImagePreview, previewLp); }
+        LinearLayout imageActions = new LinearLayout(this); imageActions.setOrientation(LinearLayout.HORIZONTAL);
+        TextView replaceImage = actionButton("Выбрать / заменить", true); TextView clearImage = actionButton("Убрать", false);
+        LinearLayout.LayoutParams replaceLp = new LinearLayout.LayoutParams(0, dp(44), 1); replaceLp.topMargin = dp(9); imageActions.addView(replaceImage, replaceLp);
+        LinearLayout.LayoutParams clearLp = new LinearLayout.LayoutParams(0, dp(44), 1); clearLp.setMargins(dp(7), dp(9), 0, 0); imageActions.addView(clearImage, clearLp);
+        imageCard.addView(imageActions); fields.addView(imageCard, params(-1, -2));
+        replaceImage.setOnClickListener(v -> openNodeImagePicker());
+        clearImage.setOnClickListener(v -> { try { node.put("image", ""); } catch (Exception ignored) { } refreshNodeImageEditor(node); });
+        fields.addView(fieldLabel("Варианты ответа · по одному в строке"));
+        EditText options = editText("Например: Поговорить\nУйти"); options.setSingleLine(false); options.setMinLines(2); options.setGravity(Gravity.TOP);
         JSONArray oldChoices = node.optJSONArray("choices"); StringBuilder optionText = new StringBuilder();
         if (oldChoices != null) for (int i = 0; i < oldChoices.length(); i++) { JSONObject ch = oldChoices.optJSONObject(i); if (ch != null) { if (optionText.length() > 0) optionText.append('\n'); optionText.append(ch.optString("label", "")); } }
-        options.setText(optionText.toString()); LinearLayout.LayoutParams op = params(-1, 90); op.topMargin = dp(8); fields.addView(options, op);
-        EditText rule = editText("Для проверки: gold>=50, xp>=20, has:Зелье, quest:Название квеста");
-        rule.setText(node.optString("condition", ""));
-        LinearLayout.LayoutParams ruleLp = params(-1, 50); ruleLp.topMargin = dp(8); fields.addView(rule, ruleLp);
-        new AlertDialog.Builder(this).setTitle("Редактировать узел").setView(fields).setNegativeButton("Отмена", null).setPositiveButton("Сохранить", (d, w) -> {
+        options.setText(optionText.toString()); LinearLayout.LayoutParams op = params(-1, 84); fields.addView(options, op);
+        fields.addView(fieldLabel("Условие для этого узла"));
+        EditText rule = editText("gold>=50, xp>=20, has:Зелье"); rule.setText(node.optString("condition", "")); fields.addView(rule, params(-1, 50));
+        Dialog dialog = new Dialog(this);
+        showStudioDialog(dialog, "Редактировать узел", fields, "Сохранить", () -> {
             try {
                 node.put("title", title.getText().toString().trim().isEmpty() ? "Без названия" : title.getText().toString().trim());
                 node.put("text", body.getText().toString().trim());
-                JSONArray choices = new JSONArray();
-                JSONArray previousChoices = node.optJSONArray("choices");
+                JSONArray choices = new JSONArray(); JSONArray previousChoices = node.optJSONArray("choices");
                 for (String line : options.getText().toString().split("\\n")) {
-                    String label = line.trim();
-                    if (!label.isEmpty()) {
-                        int index = choices.length();
-                        JSONObject ch = new JSONObject();
-                        ch.put("label", label);
-                        JSONObject previous = previousChoices == null ? null : previousChoices.optJSONObject(index);
-                        ch.put("target", previous == null ? "" : previous.optString("target", ""));
-                        if (previous != null) {
-                            for (String property : new String[] {"effect", "requiresItem", "fallbackTarget"}) {
-                                if (previous.has(property)) ch.put(property, previous.get(property));
-                            }
-                        }
-                        choices.put(ch);
-                    }
+                    String label = line.trim(); if (label.isEmpty()) continue;
+                    int index = choices.length(); JSONObject ch = new JSONObject(); ch.put("label", label);
+                    JSONObject previous = previousChoices == null ? null : previousChoices.optJSONObject(index);
+                    ch.put("target", previous == null ? "" : previous.optString("target", ""));
+                    if (previous != null) for (String property : new String[] {"effect", "requiresItem", "fallbackTarget"}) if (previous.has(property)) ch.put(property, previous.get(property));
+                    choices.put(ch);
                 }
-                node.put("choices", choices);
-                node.put("condition", rule.getText().toString().trim());
-                touchProject(project);
+                node.put("choices", choices); node.put("condition", rule.getText().toString().trim()); touchProject(project);
             } catch (Exception ignored) { }
-            render();
-        }).show();
+            dialog.dismiss(); selectedNodeId = ""; render();
+        }, "Отмена", () -> { try { node.put("image", originalNodeImage); } catch (Exception ignored) { } dialog.dismiss(); selectedNodeId = ""; });
+        dialog.setOnCancelListener(d -> { try { node.put("image", originalNodeImage); } catch (Exception ignored) { } selectedNodeId = ""; });
+    }
+
+    private TextView fieldLabel(String label) {
+        TextView view = text(label, 12, colorPrimary(), true);
+        LinearLayout.LayoutParams lp = params(-1, -2); lp.topMargin = dp(12); lp.bottomMargin = dp(5); view.setLayoutParams(lp); return view;
+    }
+
+    private void openNodeImagePicker() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT); intent.setType("image/*");
+        intent.addCategory(Intent.CATEGORY_OPENABLE); intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        try { startActivityForResult(intent, NODE_IMAGE_REQUEST); }
+        catch (Exception e) { Toast.makeText(this, "Не удалось открыть выбор изображения", Toast.LENGTH_SHORT).show(); }
+    }
+
+    private void refreshNodeImageEditor(JSONObject node) {
+        if (nodeImagePreview != null) {
+            ViewGroup parent = (ViewGroup) nodeImagePreview.getParent(); if (parent != null) parent.removeView(nodeImagePreview);
+            nodeImagePreview = null;
+        }
+        if (nodeImageStatus != null) nodeImageStatus.setText(node.optString("image", "").isEmpty() ? "Изображение не выбрано" : "Изображение сцены обновлено");
+        ImageView preview = nodeImageView(node, dp(190));
+        if (preview != null && nodeImageStatus != null && nodeImageStatus.getParent() instanceof LinearLayout) {
+            LinearLayout parent = (LinearLayout) nodeImageStatus.getParent();
+            parent.addView(preview, 1, params(-1, dp(190))); nodeImagePreview = preview;
+        }
+    }
+
+    private ImageView nodeImageView(JSONObject node, int height) {
+        String image = node == null ? "" : node.optString("image", "");
+        if (image.isEmpty()) return null;
+        Bitmap bitmap = null;
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options(); bounds.inJustDecodeBounds = true;
+            if (image.startsWith("node-images/")) BitmapFactory.decodeFile(new File(getFilesDir(), image).getAbsolutePath(), bounds);
+            else try (InputStream input = getAssets().open("botcraft/" + image)) { BitmapFactory.decodeStream(input, null, bounds); }
+            int target = Math.max(dp(220), height);
+            int sample = 1; while (bounds.outWidth / sample > target * 2 || bounds.outHeight / sample > target * 2) sample *= 2;
+            BitmapFactory.Options options = new BitmapFactory.Options(); options.inSampleSize = sample;
+            if (image.startsWith("node-images/")) bitmap = BitmapFactory.decodeFile(new File(getFilesDir(), image).getAbsolutePath(), options);
+            else try (InputStream input = getAssets().open("botcraft/" + image)) { bitmap = BitmapFactory.decodeStream(input, null, options); }
+        } catch (Exception ignored) { }
+        if (bitmap == null) return null;
+        ImageView view = new ImageView(this); view.setScaleType(ImageView.ScaleType.CENTER_CROP); view.setImageBitmap(bitmap);
+        view.setBackground(round(dark ? "#202438" : "#E8ECF5", 14)); view.setClipToOutline(true);
+        return view;
+    }
+
+    private void showStudioDialog(Dialog dialog, String title, View content, String primary, Runnable onPrimary, String secondary, Runnable onSecondary) {
+        LinearLayout panel = new LinearLayout(this); panel.setOrientation(LinearLayout.VERTICAL); panel.setPadding(dp(20), dp(18), dp(20), dp(16));
+        panel.setBackground(round(dark ? "#191D2B" : "#FFFFFF", 24));
+        TextView heading = text(title, 20, colorText(), true); LinearLayout.LayoutParams headingLp = params(-1, -2); headingLp.bottomMargin = dp(12); panel.addView(heading, headingLp);
+        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(false); scroll.setClipToPadding(false); scroll.addView(content);
+        panel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout buttons = new LinearLayout(this); buttons.setOrientation(LinearLayout.HORIZONTAL);
+        if (secondary != null) {
+            TextView secondaryButton = actionButton(secondary, false); LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(0, dp(48), 1); slp.setMargins(0, dp(12), dp(7), 0); buttons.addView(secondaryButton, slp);
+            secondaryButton.setOnClickListener(v -> { if (onSecondary != null) onSecondary.run(); });
+        }
+        TextView primaryButton = actionButton(primary, true); LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(0, dp(48), 1); plp.topMargin = dp(12); if (secondary != null) plp.setMargins(dp(7), dp(12), 0, 0); buttons.addView(primaryButton, plp);
+        primaryButton.setOnClickListener(v -> { if (onPrimary != null) onPrimary.run(); });
+        panel.addView(buttons);
+        dialog.setContentView(panel);
+        Window window = dialog.getWindow(); if (window != null) { window.setBackgroundDrawableResource(android.R.color.transparent); window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND); WindowManager.LayoutParams attrs = window.getAttributes(); attrs.dimAmount = 0.58f; window.setAttributes(attrs); }
+        dialog.show();
+        if (window != null) window.setLayout(Math.min(getResources().getDisplayMetrics().widthPixels - dp(28), dp(520)), Math.min(getResources().getDisplayMetrics().heightPixels - dp(100), dp(760)));
+    }
+
+    private void confirmNodeDelete(JSONObject project, String nodeId) {
+        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL);
+        content.addView(text("Связи на этот узел станут пустыми. Это действие нельзя отменить.", 14, colorMuted(), false));
+        Dialog dialog = new Dialog(this);
+        showStudioDialog(dialog, "Удалить узел?", content, "Удалить", () -> { deleteNode(project, nodeId); dialog.dismiss(); render(); }, "Оставить", dialog::dismiss);
     }
 
     private void chooseChoiceTarget(JSONObject project, String sourceId, int choiceIndex) {
-        JSONObject source = findNode(project, sourceId);
-        JSONArray nodes = worldNodes(project);
+        JSONObject source = findNode(project, sourceId); JSONArray nodes = worldNodes(project);
         JSONArray choices = source == null ? null : source.optJSONArray("choices");
         if (choices == null || choiceIndex < 0 || choiceIndex >= choices.length()) return;
-        String[] labels = new String[nodes.length() + 1];
-        labels[0] = "— Завершить ветку —";
-        for (int i = 0; i < nodes.length(); i++) {
-            JSONObject node = nodes.optJSONObject(i);
-            labels[i + 1] = node == null ? "Узел" : node.optString("title", "Узел");
-        }
-        new AlertDialog.Builder(this).setTitle("Переход для варианта").setItems(labels, (d, which) -> {
-            try {
-                JSONObject choice = choices.optJSONObject(choiceIndex);
-                if (choice != null) choice.put("target", which == 0 ? "" : nodes.optJSONObject(which - 1).optString("id"));
-                touchProject(project);
-            } catch (Exception ignored) { }
+        JSONObject choice = choices.optJSONObject(choiceIndex); if (choice == null) return;
+        showTargetPicker("Переход для варианта", "Выбери сцену, которая откроется после этого ответа.", project, sourceId, choice.optString("target", ""), true, target -> {
+            try { choice.put("target", target); touchProject(project); } catch (Exception ignored) { }
             render();
-        }).setNegativeButton("Отмена", null).show();
+        });
     }
+
+    private interface TargetSelected { void onSelected(String target); }
 
     private void chooseNodeTarget(JSONObject project, String sourceId) {
         JSONObject source = findNode(project, sourceId); JSONArray nodes = worldNodes(project);
         if (source == null || nodes.length() < 2) { Toast.makeText(this, "Сначала добавь ещё один узел", Toast.LENGTH_SHORT).show(); return; }
-        String[] labels = new String[nodes.length() + 1]; labels[0] = "— Без перехода —";
-        for (int i = 0; i < nodes.length(); i++) { JSONObject node = nodes.optJSONObject(i); labels[i + 1] = node == null ? "Узел" : node.optString("title", "Узел"); }
-        new AlertDialog.Builder(this).setTitle("Следующий узел").setItems(labels, (d, which) -> {
-            try { source.put("next", which == 0 ? "" : nodes.optJSONObject(which - 1).optString("id")); touchProject(project); }
-            catch (Exception ignored) { }
+        showTargetPicker("Следующий узел", "Свяжи эту сцену со следующим шагом сценария.", project, sourceId, source.optString("next", ""), false, target -> {
+            try { source.put("next", target); touchProject(project); } catch (Exception ignored) { }
             render();
-        }).setNegativeButton("Отмена", null).show();
+        });
+    }
+
+    private void showTargetPicker(String title, String description, JSONObject project, String sourceId, String selectedTarget, boolean allowEnd, TargetSelected callback) {
+        JSONArray nodes = worldNodes(project); Dialog dialog = new Dialog(this);
+        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL);
+        TextView copy = text(description, 13, colorMuted(), false); LinearLayout.LayoutParams copyLp = params(-1, -2); copyLp.bottomMargin = dp(10); content.addView(copy, copyLp);
+        if (allowEnd) addTargetOption(content, dialog, "Завершить ветку", "Сценарий заканчивается на этом выборе", "", selectedTarget, callback);
+        else addTargetOption(content, dialog, "Без перехода", "Оставить сцену без следующего шага", "", selectedTarget, callback);
+        for (int i = 0; i < nodes.length(); i++) {
+            JSONObject node = nodes.optJSONObject(i); if (node == null) continue;
+            String id = node.optString("id", ""); if (id.equals(sourceId)) continue;
+            Template type = findTemplate(node.optString("type", "dialogue"));
+            addTargetOption(content, dialog, type.emoji + "  " + node.optString("title", type.title), type.title + " · " + id.substring(0, Math.min(6, id.length())), id, selectedTarget, callback);
+        }
+        showStudioDialog(dialog, title, content, "Закрыть", dialog::dismiss, null, null);
+    }
+
+    private void addTargetOption(LinearLayout list, Dialog dialog, String title, String subtitle, String target, String selected, TargetSelected callback) {
+        LinearLayout row = cardColumn(); row.setOrientation(LinearLayout.VERTICAL);
+        row.addView(text((target.equals(selected) ? "✓  " : "") + title, 15, target.equals(selected) ? colorPrimary() : colorText(), true));
+        TextView detail = text(subtitle, 11, colorMuted(), false); LinearLayout.LayoutParams dp = params(-1, -2); dp.topMargin = dp(3); row.addView(detail, dp);
+        LinearLayout.LayoutParams rp = params(-1, -2); rp.bottomMargin = dp(8); list.addView(row, rp);
+        row.setOnClickListener(v -> { dialog.dismiss(); callback.onSelected(target); });
     }
 
     private void deleteNode(JSONObject project, String nodeId) {
@@ -1745,6 +1865,39 @@ public class MainActivity extends Activity {
         if (requestCode == INSTALL_PERMISSION_REQUEST) {
             if (Build.VERSION.SDK_INT < 26 || getPackageManager().canRequestPackageInstalls()) openInstaller(pendingApkUri);
             else setUpdateMessage("Разрешение не включено. Его можно дать в настройках Android и повторить обновление.", false);
+        } else if (requestCode == NODE_IMAGE_REQUEST && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            saveSelectedNodeImage(data.getData());
+        }
+    }
+
+    private void saveSelectedNodeImage(Uri uri) {
+        JSONObject project = findProject(editingId); JSONObject node = project == null ? null : findNode(project, selectedNodeId);
+        if (node == null) return;
+        String extension = "jpg";
+        String mime = getContentResolver().getType(uri);
+        boolean convertWebp = "image/webp".equals(mime);
+        if (mime != null) { if (mime.equals("image/png")) extension = "png"; else if (mime.equals("image/gif")) extension = "gif"; }
+        File directory = new File(getFilesDir(), "node-images");
+        if (!directory.exists() && !directory.mkdirs()) { Toast.makeText(this, "Не удалось создать хранилище изображения", Toast.LENGTH_SHORT).show(); return; }
+        File output = new File(directory, node.optString("id", UUID.randomUUID().toString()) + "." + extension);
+        long maxImageBytes = ("gif".equals(extension) ? 50L : 10L) * 1024L * 1024L;
+        try (InputStream input = getContentResolver().openInputStream(uri); FileOutputStream out = new FileOutputStream(output)) {
+            if (input == null) throw new IllegalStateException("Image stream unavailable");
+            if (convertWebp) {
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream(); byte[] buffer = new byte[8192]; int count; long total = 0;
+                while ((count = input.read(buffer)) != -1) { total += count; if (total > maxImageBytes) throw new IllegalArgumentException("Image too large"); bytes.write(buffer, 0, count); }
+                Bitmap bitmap = BitmapFactory.decodeByteArray(bytes.toByteArray(), 0, bytes.size());
+                if (bitmap == null || !bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)) throw new IllegalArgumentException("Unsupported image");
+                bitmap.recycle();
+            } else {
+                byte[] buffer = new byte[8192]; int count; long total = 0;
+                while ((count = input.read(buffer)) != -1) { total += count; if (total > maxImageBytes) throw new IllegalArgumentException("Image too large"); out.write(buffer, 0, count); }
+            }
+            node.put("image", "node-images/" + output.getName());
+            refreshNodeImageEditor(node);
+            Toast.makeText(this, "Иллюстрация добавлена к узлу", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            output.delete(); Toast.makeText(this, "Не удалось загрузить изображение (лимит: JPEG/PNG 10 МБ, GIF 50 МБ)", Toast.LENGTH_LONG).show();
         }
     }
 
