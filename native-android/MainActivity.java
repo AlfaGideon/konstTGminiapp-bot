@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -30,6 +31,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -70,6 +72,11 @@ public class MainActivity extends Activity {
     private static final String BOT_STATUS_KEY = "telegram_bot_status";
     private static final String ACTIVE_WORLD_KEY = "active_world_id";
     private static final String STARTER_WORLD_ID = "demo-north-archipelago";
+    private static final String CAMPAIGN_SKIN_KEY = "campaign_player_skin";
+    private static final String[][] CAMPAIGN_SKINS = {
+        {"wanderer", "🧥", "Странник"}, {"ranger", "🏹", "Следопыт"}, {"arctic", "❄️", "Полярник"},
+        {"scholar", "🔮", "Хранитель"}, {"storm", "⚡", "Штормовой"}, {"royal", "👑", "Княжеский"}
+    };
     private static final String BOT_TOKEN_KEY_ALIAS = "botcraft-telegram-token-v1";
     private static final int INSTALL_PERMISSION_REQUEST = 411;
     private static final int NOTIFICATION_PERMISSION_REQUEST = 412;
@@ -248,7 +255,14 @@ public class MainActivity extends Activity {
 
     private void seedStarterCampaign() {
         JSONObject existing = findProject(STARTER_WORLD_ID);
-        if (existing != null && worldNodes(existing).length() > 0) return;
+        if (existing != null && existing.optInt("campaignVersion", 0) >= 2) return;
+        if (existing != null && worldNodes(existing).length() > 0) {
+            seedOpenWorld(existing);
+            upgradeCampaignStory(existing);
+            try { existing.put("campaignVersion", 2); existing.put("updatedAt", System.currentTimeMillis()); } catch (Exception ignored) { }
+            saveProjects();
+            return;
+        }
         JSONObject world = existing == null ? new JSONObject() : existing;
         try {
             world.put("id", STARTER_WORLD_ID);
@@ -259,7 +273,7 @@ public class MainActivity extends Activity {
             JSONArray nodes = new JSONArray();
 
             JSONObject intro = storyNode("na_intro", "start", "Северный порт Нордхейм",
-                "Полночь длится уже девять дней. За фьордом погас маяк, и ледяной туман ползёт к домам. Картограф Мира обещает найти путь к его сердцу.\n\nВ кармане — 28 серебряных марок. Решай сам, кому доверять.", "01-north-harbor.jpg");
+                "Полночь длится уже девять дней. За фьордом погас маяк, и ледяной туман ползёт к домам. Картограф Мира обещает найти путь к его сердцу.\n\nВ кармане — 45 серебряных марок. Решай сам, кому доверять.", "01-north-harbor.jpg");
             addStoryChoice(intro, "Найти картографа Миру", "na_mira", "", "", 0, "", "");
             addStoryChoice(intro, "Сначала зайти за припасами", "na_market", "", "", 0, "", ""); nodes.put(intro);
 
@@ -273,7 +287,7 @@ public class MainActivity extends Activity {
             addStoryChoice(legend, "Пора собираться", "na_market", "", "", 0, "", ""); nodes.put(legend);
 
             JSONObject market = storyNode("na_market", "shop", "Лавка у причала",
-                "Старый Торм продаёт последние вещи перед закрытием гавани. У тебя 28 марок: выбери одну покупку или сохрани деньги.", "");
+                "Старый Торм продаёт последние вещи перед закрытием гавани. У тебя 45 марок: купи зелья или снаряжение и оставь часть денег на дорогу.", "");
             addStoryChoice(market, "Зелье северной мяты · 12 марок", "na_wreck", "buy", "Зелье северной мяты", 12, "", "");
             addStoryChoice(market, "Сигнальный гарпун · 20 марок", "na_wreck", "buy", "Сигнальный гарпун", 20, "", "");
             addStoryChoice(market, "Не покупать ничего", "na_wreck", "", "", 0, "", ""); nodes.put(market);
@@ -285,11 +299,11 @@ public class MainActivity extends Activity {
             addStoryChoice(wreck, "Проверить рюкзак", "na_inventory", "", "", 0, "", ""); nodes.put(wreck);
 
             JSONObject inventory = storyNode("na_inventory", "inventory", "Рюкзак путешественника",
-                "Всё найденное остаётся с тобой. Зелье можно выпить во время боя, а осколок или гарпун помогут открыть маяк.", "");
+                "Всё найденное остаётся с тобой. Зелье можно выпить во время боя; осколок или гарпун помогут открыть маяк.", "");
             inventory.put("next", "na_wolf"); nodes.put(inventory);
 
             JSONObject wolf = storyNode("na_wolf", "battle", "Ледяной пёс",
-                "Из снежной пелены выскакивает зверь с прозрачными клыками. Он преграждает дорогу к маяку.\n\nУдар наносит 2 урона; зелье лечит 4 здоровья.", "");
+                "Из снежной пелены выскакивает зверь с прозрачными клыками. Он преграждает дорогу к маяку.\n\nБой пошаговый: сила героя и надетое снаряжение влияют на урон. Зелье восстанавливает 8 здоровья.", "");
             wolf.put("enemyName", "Ледяной пёс"); wolf.put("enemyHp", 5); wolf.put("enemyAttack", 1);
             wolf.put("victoryTarget", "na_lighthouse"); wolf.put("defeatTarget", "na_retreat"); wolf.put("fleeTarget", "na_retreat");
             wolf.put("rewardGold", 10); wolf.put("rewardXp", 15); wolf.put("rewardItem", "Клык ледяного пса"); nodes.put(wolf);
@@ -302,14 +316,16 @@ public class MainActivity extends Activity {
             addStoryChoice(lighthouse, "Вернуться к Торму за припасами", "na_market", "", "", 0, "", ""); nodes.put(lighthouse);
 
             JSONObject bridge = storyNode("na_bridge", "dialogue", "Лестница под небом",
-                "Внутри башни линзы вращаются сами собой. Мира шепчет пароль, и на вершине раскрывается штормовое окно. За ним поднимается силуэт — огромный, как сама башня.", "");
-            addStoryChoice(bridge, "Подняться навстречу дракону", "na_wyrm", "", "", 0, "", ""); nodes.put(bridge);
+                "Внутри башни линзы вращаются сами собой. Мира шепчет пароль, и на вершине раскрывается штормовое окно. За ним поднимается силуэт — огромный, как сама башня. Чтобы открыть путь к Вейру, разожги маяк, заверши звёздное поручение и достигни 6 уровня.", "");
+            addStoryChoice(bridge, "Подняться навстречу дракону", "na_wyrm", "", "", 0, "", "");
+            try { JSONObject finalChoice = bridge.optJSONArray("choices").optJSONObject(0); finalChoice.put("requiresLevel", 6); finalChoice.put("requiresQuest", "stars"); } catch (Exception ignored) { }
+            nodes.put(bridge);
 
             JSONObject wyrm = storyNode("na_wyrm", "battle", "Вейр, дракон белой бури",
-                "Древний дракон расправляет крылья. В центре груди горит Полярное Сердце. Его удары наносят 2 урона; зелье сработает прямо в бою.\n\nПобеди — и выбери, кому достанется сила сердца.", "03-ice-wyrm.jpg");
-            wyrm.put("enemyName", "Вейр, дракон белой бури"); wyrm.put("enemyHp", 8); wyrm.put("enemyAttack", 2);
+                "Древний дракон расправляет крылья. В центре груди горит Полярное Сердце. Его удары страшны даже закалённому герою. Экипируй найденную броню и возьми запас зелий.\n\nПобеди — и выбери, кому достанется сила сердца.", "03-ice-wyrm.jpg");
+            wyrm.put("enemyName", "Вейр, дракон белой бури"); wyrm.put("enemyHp", 48); wyrm.put("enemyAttack", 8);
             wyrm.put("victoryTarget", "na_ending"); wyrm.put("defeatTarget", "na_retreat"); wyrm.put("fleeTarget", "na_retreat");
-            wyrm.put("rewardGold", 30); wyrm.put("rewardXp", 50); wyrm.put("rewardItem", "Полярное Сердце"); nodes.put(wyrm);
+            wyrm.put("rewardGold", 100); wyrm.put("rewardXp", 350); wyrm.put("rewardItem", "Полярное Сердце"); nodes.put(wyrm);
 
             JSONObject ending = storyNode("na_ending", "loot", "Судьба Полярного Сердца",
                 "Вейр падает, и буря стихает. Полярное Сердце пульсирует у тебя в руках, а Мира ждёт ответа: вернуть его маяку и спасти гавань — или забрать древнюю силу себе? Трофей дракона уже в рюкзаке.", "01-north-harbor.jpg");
@@ -330,10 +346,80 @@ public class MainActivity extends Activity {
             addStoryChoice(retreat, "Начать историю заново", "na_intro", "reset", "", 0, "", ""); nodes.put(retreat);
 
             world.put("nodes", nodes);
+            seedOpenWorld(world);
+            world.put("campaignVersion", 2);
             if (existing == null) projects.add(world);
             saveProjects();
             if (preferences.getString(ACTIVE_WORLD_KEY, "").isEmpty()) preferences.edit().putString(ACTIVE_WORLD_KEY, STARTER_WORLD_ID).apply();
         } catch (Exception ignored) { }
+    }
+
+    private void seedOpenWorld(JSONObject world) {
+        try {
+            JSONArray regions = new JSONArray();
+            addOpenRegion(regions, "harbor", "Нордхейм · Порт огней", "Здесь начинается северный тракт. У причала можно отдохнуть, купить припасы и поговорить с Мирой о странных огнях на островах.", 1, 0, 0, 0, 0, "", "forest,village", 0, 0);
+            addOpenRegion(regions, "forest", "Шепчущий лес", "Сосны здесь растут так тесно, что даже в полдень царит сумрак. В снегу видны свежие волчьи следы, а между деревьями мерцают огоньки.", 1, 7, 2, 22, 8, "wolf_fang", "harbor,shipwreck,wolf_cliffs", 1, 0);
+            addOpenRegion(regions, "village", "Забытая деревня", "Дома покосились под тяжестью снега. В кузнице ещё теплится жар, а на площади стоит колокол, который звонит без ветра.", 2, 12, 3, 32, 12, "guard_badge", "harbor,mine,watchtower", 0, 1);
+            addOpenRegion(regions, "shipwreck", "Мыс разбитых кораблей", "Обломки судов застряли в ледяной бухте. Под водой блестят старые монеты, но шум прибоя привлекает утопленников.", 2, 10, 3, 36, 14, "silver_compass", "forest,crystal_cave", 2, 0);
+            addOpenRegion(regions, "mine", "Шахта синего угля", "Рельсы уходят в гору, где когда-то добывали светящийся уголь. В штольнях слышны удары кирки — хотя шахта закрыта много лет.", 3, 17, 4, 48, 18, "crystal_mail", "village,crystal_cave,high_pass", 0, 2);
+            addOpenRegion(regions, "crystal_cave", "Хрустальные пещеры", "Ледяные кристаллы растут здесь, как деревья. Их свет открывает древние фрески — и будит существ, спящих в стенах.", 3, 19, 4, 55, 20, "crystal_mail", "shipwreck,mine,wolf_cliffs", 3, 1);
+            addOpenRegion(regions, "wolf_cliffs", "Волчьи утёсы", "Ветер свистит над обрывом. Стая делит добычу у старой сигнальной башни; на самом верху оставлена карта перевала.", 3, 20, 5, 62, 23, "wolf_pelt", "forest,crystal_cave,observatory", 2, 1);
+            addOpenRegion(regions, "watchtower", "Сторожевая башня", "Башня дозорных окружена пустыми кострами. На стенах вырезаны знаки, похожие на созвездия.", 3, 21, 4, 60, 22, "guard_badge", "village,lighthouse", 1, 2);
+            addOpenRegion(regions, "lighthouse", "Маяк без света", "Под лестницей башни скрыты старые механизмы. Кто-то заново зажёг сигнальные чаши, но их охраняет штормовой культ.", 4, 27, 6, 78, 30, "beacon_spear", "watchtower,high_pass", 3, 2);
+            addOpenRegion(regions, "high_pass", "Перевал белых великанов", "Узкая тропа проходит между ледяными стенами. Следы ведут к пещерам великанов и к древней дороге на восток.", 4, 31, 7, 92, 34, "giant_mantle", "mine,lighthouse,observatory,storm_isle", 2, 3);
+            addOpenRegion(regions, "observatory", "Обсерватория звёзд", "Медные купола вращаются сами собой. В дневнике астронома записан путь к месту, где буря держит небо в плену.", 5, 36, 8, 110, 40, "star_lens", "wolf_cliffs,high_pass,storm_isle", 4, 1);
+            addOpenRegion(regions, "storm_isle", "Остров белой бури", "Молнии застыли в облаках, словно трещины на стекле. Каждая победа здесь приближает тебя к логову Вейра.", 6, 44, 9, 145, 55, "storm_ring", "high_pass,observatory,heart_peak", 4, 3);
+            addOpenRegion(regions, "heart_peak", "Пик Полярного Сердца", "На вершине ждёт Вейр. Под чешуёй дракона бьётся сердце, из-за которого архипелаг забыл, что такое рассвет.", 7, 58, 11, 240, 100, "wyrm_armor", "storm_isle", 5, 4);
+            world.put("regions", regions);
+        } catch (Exception ignored) { }
+    }
+
+    private void upgradeCampaignStory(JSONObject world) {
+        JSONArray nodes = worldNodes(world);
+        for (int i = 0; i < nodes.length(); i++) {
+            JSONObject node = nodes.optJSONObject(i); if (node == null) continue;
+            try {
+                String nodeId = node.optString("id", "");
+                if ("na_wyrm".equals(nodeId)) {
+                    node.put("enemyHp", 48); node.put("enemyAttack", 8); node.put("rewardGold", 100); node.put("rewardXp", 350);
+                    String body = node.optString("text", "").replace("Его удары наносят 2 урона; зелье сработает прямо в бою.", "Его удары страшны даже закалённому герою. Экипируй найденную броню и возьми запас зелий.");
+                    node.put("text", body);
+                }
+                if ("na_intro".equals(nodeId)) node.put("text", node.optString("text", "").replace("28 серебряных марок", "45 серебряных марок"));
+                if ("na_market".equals(nodeId)) node.put("text", node.optString("text", "").replace("У тебя 28 марок: выбери одну покупку или сохрани деньги.", "У тебя 45 марок: купи зелья или снаряжение и оставь часть денег на дорогу."));
+                if ("na_wolf".equals(nodeId)) node.put("text", node.optString("text", "").replace("Удар наносит 2 урона; зелье лечит 4 здоровья.", "Бой пошаговый: сила героя и надетое снаряжение влияют на урон. Зелье восстанавливает 8 здоровья."));
+                if ("na_bridge".equals(nodeId)) {
+                    JSONArray choices = node.optJSONArray("choices");
+                    if (choices != null && choices.length() > 0) { JSONObject choice = choices.optJSONObject(0); if (choice != null) { choice.put("requiresLevel", 6); choice.put("requiresQuest", "stars"); } }
+                    String body = node.optString("text", "");
+                    if (!body.contains("6 уровня")) node.put("text", body + "\n\nЧтобы открыть путь к Вейру, разожги маяк, заверши звёздное поручение и достигни 6 уровня.");
+                }
+            } catch (Exception ignored) { }
+        }
+    }
+
+    private void addOpenRegion(JSONArray regions, String id, String title, String text, int minLevel, int enemyHp, int enemyAttack, int xp, int gold, String loot, String exits, int x, int y) throws Exception {
+        JSONObject region = new JSONObject();
+        region.put("id", id); region.put("title", title); region.put("text", text);
+        region.put("minLevel", minLevel); region.put("enemyHp", enemyHp); region.put("enemyAttack", enemyAttack);
+        region.put("xp", xp); region.put("gold", gold); region.put("loot", loot);
+        JSONArray paths = new JSONArray();
+        for (String exit : exits.split(",")) if (!exit.isEmpty()) paths.put(exit);
+        region.put("exits", paths); region.put("mapX", x); region.put("mapY", y);
+        region.put("enemy", enemyForRegion(id));
+        regions.put(region);
+    }
+
+    private String enemyForRegion(String id) {
+        switch (id) {
+            case "forest": return "Снежный волк"; case "village": return "Тень деревенского дозорного";
+            case "shipwreck": return "Утопленник с разбитого судна"; case "mine": return "Призрак шахтёра";
+            case "crystal_cave": return "Кристальный страж"; case "wolf_cliffs": return "Вожак снежной стаи";
+            case "watchtower": return "Сломанный небесный дозорный"; case "lighthouse": return "Культист белой бури";
+            case "high_pass": return "Ледяной великан"; case "observatory": return "Звёздный призрак";
+            case "storm_isle": return "Буревой ревенант"; case "heart_peak": return "Вейр, древний дракон";
+            default: return "";
+        }
     }
 
     private JSONObject storyNode(String id, String type, String title, String text, String image) {
@@ -391,16 +477,17 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams slp = params(-1, -2); slp.topMargin = dp(18); page.addView(start, slp);
 
         LinearLayout campaign = cardColumn();
-        TextView campaignBadge = text("ГОТОВАЯ ИСТОРИЯ · 14 СЦЕН · 2 КОНЦОВКИ", 10, colorPrimary(), true);
+        TextView campaignBadge = text("14 СЦЕН · 13 ЛОКАЦИЙ · 2 КОНЦОВКИ", 10, colorPrimary(), true);
         campaign.addView(campaignBadge);
         TextView campaignTitle = text("Сердце Полуночного Архипелага", 18, colorText(), true);
         LinearLayout.LayoutParams campaignTitleLp = params(-1, -2); campaignTitleLp.topMargin = dp(7); campaign.addView(campaignTitle, campaignTitleLp);
-        TextView campaignCopy = text("Проклятый маяк, картограф Мира, лавка припасов, ледяной пёс и бой с драконом. Сцены и решения можно менять в конструкторе.", 12, colorMuted(), false);
+        TextView campaignCopy = text("Большая карта архипелага, свободные переходы между островами, охота на мобов, уровни, квесты и добыча экипировки. Главный сюжет можно проходить в своём темпе.", 12, colorMuted(), false);
         LinearLayout.LayoutParams campaignCopyLp = params(-1, -2); campaignCopyLp.topMargin = dp(5); campaign.addView(campaignCopy, campaignCopyLp);
         TextView playCampaign = actionButton("Настроить готовую кампанию", false);
         LinearLayout.LayoutParams playLp = params(-1, 46); playLp.topMargin = dp(11); campaign.addView(playCampaign, playLp);
         playCampaign.setOnClickListener(v -> openProjectEditor(STARTER_WORLD_ID));
         LinearLayout.LayoutParams campaignLp = params(-1, -2); campaignLp.topMargin = dp(14); page.addView(campaign, campaignLp);
+        addCampaignSkinStudio();
 
         addSectionTitle("Базовые блоки", "Начни с входа в мир и персонажей");
         addTemplateCard(TEMPLATES[0], false);
@@ -416,6 +503,43 @@ public class MainActivity extends Activity {
         TextView viewProjects = actionButton("Открыть проекты", false);
         LinearLayout.LayoutParams vp = params(-1, 46); vp.topMargin = dp(9); page.addView(viewProjects, vp);
         viewProjects.setOnClickListener(v -> navigate(TAB_PROJECTS));
+    }
+
+    private void addCampaignSkinStudio() {
+        LinearLayout card = cardColumn();
+        LinearLayout.LayoutParams cardLp = params(-1, -2); cardLp.topMargin = dp(12); page.addView(card, cardLp);
+        card.addView(text("ГАРДЕРОБ ПЕРСОНАЖА", 10, colorPrimary(), true));
+        TextView title = text("Настрой облик героя", 17, colorText(), true);
+        LinearLayout.LayoutParams titleLp = params(-1, -2); titleLp.topMargin = dp(5); card.addView(title, titleLp);
+        TextView hint = text("Выбери стартовый скин для новых игроков. В Telegram можно будет менять образы и надевать найденную экипировку.", 12, colorMuted(), false);
+        LinearLayout.LayoutParams hintLp = params(-1, -2); hintLp.topMargin = dp(4); card.addView(hint, hintLp);
+        String selected = preferences.getString(CAMPAIGN_SKIN_KEY, "wanderer");
+        for (int row = 0; row < 2; row++) {
+            LinearLayout options = new LinearLayout(this); options.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams rowLp = params(-1, -2); rowLp.topMargin = dp(8); card.addView(options, rowLp);
+            for (int col = 0; col < 3; col++) {
+                String[] skin = CAMPAIGN_SKINS[row * 3 + col];
+                boolean active = skin[0].equals(selected);
+                LinearLayout choice = new LinearLayout(this); choice.setOrientation(LinearLayout.VERTICAL); choice.setGravity(Gravity.CENTER);
+                choice.setPadding(dp(3), dp(6), dp(3), dp(6));
+                choice.setBackground(round(active ? (dark ? "#34304D" : "#EEEFFF") : (dark ? "#242532" : "#F5F6FA"), 12));
+                ImageView portrait = campaignSkinPreview(skin[0]); choice.addView(portrait, new LinearLayout.LayoutParams(dp(54), dp(54)));
+                TextView label = text(skin[2] + (active ? " ✓" : ""), 11, active ? colorPrimary() : colorText(), active);
+                LinearLayout.LayoutParams labelLp = params(-1, -2); labelLp.topMargin = dp(4); choice.addView(label, labelLp); label.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams choiceLp = new LinearLayout.LayoutParams(0, -2, 1); choiceLp.setMargins(dp(3), 0, dp(3), 0); options.addView(choice, choiceLp);
+                choice.setOnClickListener(v -> { preferences.edit().putString(CAMPAIGN_SKIN_KEY, skin[0]).apply(); render(); });
+            }
+        }
+    }
+
+    private ImageView campaignSkinPreview(String id) {
+        ImageView image = new ImageView(this);
+        image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        image.setBackground(round(dark ? "#161927" : "#DDE4F0", 12));
+        image.setClipToOutline(true);
+        try (InputStream input = getAssets().open("botcraft/skin-" + id + ".jpg")) { image.setImageBitmap(BitmapFactory.decodeStream(input)); }
+        catch (Exception ignored) { }
+        return image;
     }
 
     private void renderTemplates() {
