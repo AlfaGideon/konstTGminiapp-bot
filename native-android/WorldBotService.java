@@ -187,14 +187,14 @@ public final class WorldBotService extends Service {
                 String startId = startNodeId(world);
                 if (startId.isEmpty()) { sendText(token, chatId, "Открой Botcraft Studio, выбери кампанию «Сердце Полуночного Архипелага» и запусти бота."); return; }
                 JSONObject player = loadPlayer(chatId, world, false);
-                if ("world".equals(player.optString("currentMode", "story"))) showRegion(token, chatId, world, player.optString("currentRegion", "harbor"), "");
+                if ("world".equals(player.optString("currentMode", "story"))) showGridMap(token, chatId, world, player, "");
                 else {
                     String current = player.optString("currentNode", "");
                     if (current.isEmpty()) current = startId;
                     sendScene(token, chatId, world, current, true);
                 }
             } else if (text.startsWith("/map")) {
-                showWorldMap(token, chatId, activeWorld(), loadPlayer(chatId, activeWorld(), false));
+                JSONObject world = activeWorld(); showGridMap(token, chatId, world, loadPlayer(chatId, world, false), "");
             } else if (text.startsWith("/character")) {
                 showCharacter(token, chatId, loadPlayer(chatId, activeWorld(), false));
             } else if (text.startsWith("/wardrobe")) {
@@ -224,7 +224,9 @@ public final class WorldBotService extends Service {
         if (!callbackId.isEmpty()) answerCallback(token, callbackId);
         if (chat == null) return;
         long chatId = chat.optLong("id");
-        if (data.startsWith("pick:")) {
+        if (data.startsWith("grid:")) {
+            handleGridAction(token, chatId, data.substring(5));
+        } else if (data.startsWith("pick:")) {
             try {
                 int separator = data.lastIndexOf(':');
                 String sourceNode = data.substring(5, separator);
@@ -288,6 +290,7 @@ public final class WorldBotService extends Service {
             player.put("quests", new JSONObject()); player.put("kills", new JSONObject()); player.put("resources", new JSONObject());
             JSONArray visitedRegions = new JSONArray(); visitedRegions.put("harbor"); player.put("visitedRegions", visitedRegions);
             player.put("currentRegion", "harbor"); player.put("currentMode", "story");
+            player.put("gridX", 50); player.put("gridY", 50); player.put("resolvedGridEvents", new JSONArray());
             player.put("flags", new JSONObject()); player.put("visited", new JSONArray());
             player.put("clearedBattles", new JSONArray()); player.put("currentNode", ""); player.put("pageMessageId", 0);
         } catch (Exception ignored) { }
@@ -308,6 +311,9 @@ public final class WorldBotService extends Service {
             if (!player.has("visitedRegions")) { JSONArray visited = new JSONArray(); visited.put("harbor"); player.put("visitedRegions", visited); }
             if (!player.has("currentRegion")) player.put("currentRegion", "harbor");
             if (!player.has("currentMode")) player.put("currentMode", "story");
+            if (!player.has("gridX")) player.put("gridX", 50);
+            if (!player.has("gridY")) player.put("gridY", 50);
+            if (!player.has("resolvedGridEvents")) player.put("resolvedGridEvents", new JSONArray());
             if (!player.has("skins")) { JSONArray skins = new JSONArray(); skins.put(defaultSkin); player.put("skins", skins); }
             if (!player.has("skin")) player.put("skin", defaultSkin);
             if (!player.has("pageMessageId")) player.put("pageMessageId", 0);
@@ -482,7 +488,7 @@ public final class WorldBotService extends Service {
         JSONObject world = activeWorld();
         JSONObject player = loadPlayer(chatId, world, false);
         JSONObject battle = player.optJSONObject("battle");
-        if (battle != null && "overworld".equals(battle.optString("mode", ""))) {
+        if (battle != null && ("overworld".equals(battle.optString("mode", "")) || "grid".equals(battle.optString("mode", "")))) {
             handleOverworldBattleAction(token, chatId, world, player, expectedBattleId, expectedTurn, action); return;
         }
         String nodeId = player.optString("currentNode", "");
@@ -532,6 +538,243 @@ public final class WorldBotService extends Service {
         sendScene(token, chatId, world, nodeId, false);
     }
 
+    private JSONObject findWorldEvent(JSONObject world, String id) {
+        JSONArray events = world == null ? null : world.optJSONArray("worldEvents");
+        if (events == null) return null;
+        for (int i = 0; i < events.length(); i++) {
+            JSONObject event = events.optJSONObject(i);
+            if (event != null && id.equals(event.optString("id", ""))) return event;
+        }
+        return null;
+    }
+
+    private JSONObject eventAt(JSONObject world, int x, int y) {
+        JSONArray events = world == null ? null : world.optJSONArray("worldEvents");
+        if (events == null) return null;
+        for (int i = 0; i < events.length(); i++) {
+            JSONObject event = events.optJSONObject(i);
+            if (event != null && event.optInt("x", -1) == x && event.optInt("y", -1) == y) return event;
+        }
+        return null;
+    }
+
+    private String regionForGrid(int x, int y) {
+        String[] ids = {"harbor", "forest", "village", "shipwreck", "mine", "crystal_cave", "wolf_cliffs", "watchtower", "lighthouse", "high_pass", "observatory", "storm_isle", "heart_peak"};
+        int[][] centers = {{50,50},{39,38},{46,61},{27,35},{37,74},{23,60},{30,50},{58,61},{68,63},{50,75},{72,39},{82,71},{91,86}};
+        int best = 0; int distance = Integer.MAX_VALUE;
+        for (int i = 0; i < centers.length; i++) {
+            int dx = x - centers[i][0], dy = y - centers[i][1]; int candidate = dx * dx + dy * dy;
+            if (candidate < distance) { distance = candidate; best = i; }
+        }
+        return ids[best];
+    }
+
+    private String regionSymbol(String id) {
+        switch (id) {
+            case "harbor": return "🏠"; case "forest": return "🌲"; case "village": return "🏚";
+            case "shipwreck": return "⚓"; case "mine": return "⛏"; case "crystal_cave": return "💎";
+            case "wolf_cliffs": return "🐺"; case "watchtower": return "🗼"; case "lighthouse": return "🔆";
+            case "high_pass": return "⛰"; case "observatory": return "🔭"; case "storm_isle": return "🌩";
+            case "heart_peak": return "🐉"; default: return "·";
+        }
+    }
+
+    private String eventSymbol(JSONObject event) {
+        if (event == null) return "·";
+        switch (event.optString("kind", "")) {
+            case "mob": return "⚔️"; case "npc": return "👤"; case "cache": return "🎁";
+            case "shrine": return "✨"; default: return "❔";
+        }
+    }
+
+    private void showGridMap(String token, long chatId, JSONObject world, JSONObject player, String notice) {
+        JSONObject grid = world == null ? null : world.optJSONObject("grid");
+        JSONArray events = world == null ? null : world.optJSONArray("worldEvents");
+        if (grid == null || events == null || events.length() < 500) {
+            sendText(token, chatId, "Клеточная карта ещё не загружена. Открой кампанию в APK и перезапусти бота."); return;
+        }
+        JSONObject ongoingBattle = player.optJSONObject("battle");
+        if (ongoingBattle != null && ("grid".equals(ongoingBattle.optString("mode", "")) || "overworld".equals(ongoingBattle.optString("mode", "")))) { showOverworldBattle(token, chatId, world, player, "Сначала заверши бой или отступи."); return; }
+        int x = Math.max(0, Math.min(99, player.optInt("gridX", 50)));
+        int y = Math.max(0, Math.min(99, player.optInt("gridY", 50)));
+        String regionId = regionForGrid(x, y); JSONObject region = findRegion(world, regionId);
+        JSONArray visited = player.optJSONArray("visitedRegions"); boolean newRegion = !contains(visited, regionId); if (newRegion) addString(visited, regionId);
+        try { player.put("gridX", x); player.put("gridY", y); player.put("currentRegion", regionId); player.put("currentMode", "world"); savePlayer(chatId, player); } catch (Exception ignored) { }
+        StringBuilder text = new StringBuilder("МИРОВАЯ КАРТА · 100 × 100 КЛЕТОК\n");
+        text.append("Клетка (").append(x).append(", ").append(y).append(") · ").append(region == null ? regionId : region.optString("title"));
+        text.append("\nТы всегда остаёшься в центре кадра. Передвижение только по сторонам света — диагоналей нет.\n\n");
+        for (int dy = -3; dy <= 3; dy++) {
+            for (int dx = -3; dx <= 3; dx++) {
+                int cx = x + dx, cy = y + dy;
+                String cell = "⬛";
+                if (cx >= 0 && cx < 100 && cy >= 0 && cy < 100) {
+                    if (dx == 0 && dy == 0) cell = "🧍";
+                    else {
+                        JSONObject event = eventAt(world, cx, cy);
+                        cell = event != null && !contains(player.optJSONArray("resolvedGridEvents"), event.optString("id", "")) ? eventSymbol(event) : regionSymbol(regionForGrid(cx, cy));
+                    }
+                }
+                if (dx > -3) text.append(' '); text.append(cell);
+            }
+            text.append('\n');
+        }
+        text.append("\n🧍 ты  ⚔️ враг  👤 путник  🎁 находка  ✨ святилище  ⬛ край карты");
+        if (newRegion) text.append("\n\nНовая область: ").append(region == null ? regionId : region.optString("title"));
+        if (!notice.isEmpty()) text.append("\n\n").append(notice);
+        JSONObject here = eventAt(world, x, y);
+        boolean eventAvailable = here != null && !contains(player.optJSONArray("resolvedGridEvents"), here.optString("id", ""));
+        if (eventAvailable) text.append("\n\nУ этой клетки есть событие: ").append(here.optString("title", "Точка интереса"));
+        text.append("\n\n").append(playerSummary(player));
+        JSONArray keyboard = new JSONArray();
+        try {
+            addButtonRow(keyboard, "⬆️ Шаг на север", y > 0 ? "grid:move:up" : "grid:edge");
+            JSONArray middle = new JSONArray();
+            addInlineButton(middle, "⬅️ Запад", x > 0 ? "grid:move:left" : "grid:edge");
+            addInlineButton(middle, eventAvailable ? "🔎 Изучить клетку" : "📍 Ты здесь", eventAvailable ? "grid:interact" : "grid:stay");
+            addInlineButton(middle, "Восток ➡️", x < 99 ? "grid:move:right" : "grid:edge");
+            keyboard.put(middle);
+            addButtonRow(keyboard, "⬇️ Шаг на юг", y < 99 ? "grid:move:down" : "grid:edge");
+            if (!"harbor".equals(regionId)) addButtonRow(keyboard, "⚔️ Охотиться в этой зоне", "grid:hunt");
+            addButtonRow(keyboard, "📜 Задания", "ow:quests");
+            addButtonRow(keyboard, "👤 Герой и экипировка", "ow:character");
+            addButtonRow(keyboard, "🎒 Рюкзак", "ow:inventory");
+        } catch (Exception ignored) { }
+        sendPage(token, chatId, text.toString(), keyboard);
+    }
+
+    private void addInlineButton(JSONArray row, String label, String data) throws Exception {
+        JSONObject button = new JSONObject(); button.put("text", limit(label, 64)); button.put("callback_data", data); row.put(button);
+    }
+
+    private void handleGridAction(String token, long chatId, String action) {
+        JSONObject world = activeWorld(); JSONObject player = loadPlayer(chatId, world, false);
+        String[] parts = action.split(":", 3);
+        if (parts.length == 0) return;
+        if (parts[0].equals("move") && parts.length > 1) { moveGrid(token, chatId, world, player, parts[1]); return; }
+        if (parts[0].equals("interact")) { showGridEvent(token, chatId, world, player, eventAt(world, player.optInt("gridX", 50), player.optInt("gridY", 50))); return; }
+        if (parts[0].equals("fight") && parts.length > 1) { startGridEventBattle(token, chatId, world, player, parts[1]); return; }
+        if (parts[0].equals("resolve") && parts.length > 2) { resolveGridEvent(token, chatId, world, player, parts[1], parts[2]); return; }
+        if (parts[0].equals("hunt")) { startGridHunt(token, chatId, world, player); return; }
+        if (parts[0].equals("stay")) { showGridMap(token, chatId, world, player, ""); return; }
+        if (parts[0].equals("edge")) { showGridMap(token, chatId, world, player, "Ты у края мира: дальше пройти нельзя."); return; }
+        showGridMap(token, chatId, world, player, "");
+    }
+
+    private void moveGrid(String token, long chatId, JSONObject world, JSONObject player, String direction) {
+        JSONObject battle = player.optJSONObject("battle");
+        if (battle != null && ("grid".equals(battle.optString("mode", "")) || "overworld".equals(battle.optString("mode", "")))) {
+            showOverworldBattle(token, chatId, world, player, "Сначала заверши бой или отступи."); return;
+        }
+        int x = player.optInt("gridX", 50), y = player.optInt("gridY", 50);
+        switch (direction) {
+            case "up": y--; break; case "down": y++; break; case "left": x--; break; case "right": x++; break;
+            default: showGridMap(token, chatId, world, player, "Можно двигаться только вверх, вниз, влево или вправо."); return;
+        }
+        if (x < 0 || x > 99 || y < 0 || y > 99) { showGridMap(token, chatId, world, player, "Дальше край карты."); return; }
+        String prior = player.optString("currentRegion", "harbor"), next = regionForGrid(x, y);
+        String notice = "Ты сделал шаг на одну клетку к " + (direction.equals("up") ? "северу" : direction.equals("down") ? "югу" : direction.equals("left") ? "западу" : "востоку") + ".";
+        if (!prior.equals(next)) { JSONObject region = findRegion(world, next); notice += " Новая зона: " + (region == null ? next : region.optString("title")) + "."; }
+        try { player.put("gridX", x); player.put("gridY", y); player.put("currentMode", "world"); savePlayer(chatId, player); } catch (Exception ignored) { }
+        showGridMap(token, chatId, world, player, notice);
+    }
+
+    private void showGridEvent(String token, long chatId, JSONObject world, JSONObject player, JSONObject event) {
+        if (event == null) { showGridMap(token, chatId, world, player, "На этой клетке ничего нет."); return; }
+        String id = event.optString("id", "");
+        if (contains(player.optJSONArray("resolvedGridEvents"), id)) { showGridMap(token, chatId, world, player, "Ты уже исследовал это место."); return; }
+        String kind = event.optString("kind", "mystery");
+        StringBuilder text = new StringBuilder(event.optString("title", "Событие архипелага"));
+        text.append("\n\n").append(event.optString("text", "Следы ведут дальше в снег.")).append("\n\nКоординаты узла: ").append(event.optInt("x")).append(", ").append(event.optInt("y"));
+        if (kind.equals("mob")) text.append("\n\nУгроза: ").append(event.optString("enemy")).append(" · опасность ").append(event.optInt("rank"));
+        JSONArray keyboard = new JSONArray();
+        try {
+            if (kind.equals("mob")) {
+                addButtonRow(keyboard, "⚔️ Вступить в бой", "grid:fight:" + id);
+                addButtonRow(keyboard, "🕯 Обойти стороной", "grid:resolve:" + id + ":evade");
+            } else if (kind.equals("npc")) {
+                addButtonRow(keyboard, "🤝 Помочь путнику", "grid:resolve:" + id + ":help");
+                addButtonRow(keyboard, "🗺 Расспросить о маршруте", "grid:resolve:" + id + ":ask");
+                addButtonRow(keyboard, "↩️ Не вмешиваться", "grid:resolve:" + id + ":leave");
+            } else if (kind.equals("cache")) {
+                addButtonRow(keyboard, "🎁 Открыть находку", "grid:resolve:" + id + ":open");
+                addButtonRow(keyboard, "↩️ Оставить на месте", "grid:resolve:" + id + ":leave");
+            } else if (kind.equals("shrine")) {
+                addButtonRow(keyboard, "✨ Попросить помощи у святилища", "grid:resolve:" + id + ":pray");
+                addButtonRow(keyboard, "↩️ Уйти молча", "grid:resolve:" + id + ":leave");
+            } else {
+                addButtonRow(keyboard, "🔮 Коснуться руны", "grid:resolve:" + id + ":touch");
+                addButtonRow(keyboard, "🧠 Разгадать послание", "grid:resolve:" + id + ":solve");
+                addButtonRow(keyboard, "↩️ Отойти", "grid:resolve:" + id + ":leave");
+            }
+            addButtonRow(keyboard, "↩️ К клеточной карте", "ow:map");
+        } catch (Exception ignored) { }
+        sendPage(token, chatId, text.toString(), keyboard);
+    }
+
+    private void resolveGridEvent(String token, long chatId, JSONObject world, JSONObject player, String id, String choice) {
+        JSONObject event = findWorldEvent(world, id);
+        if (event == null || contains(player.optJSONArray("resolvedGridEvents"), id)) { showGridMap(token, chatId, world, player, ""); return; }
+        if ("leave".equals(choice)) { showGridMap(token, chatId, world, player, "Ты решил пока не вмешиваться."); return; }
+        addString(player.optJSONArray("resolvedGridEvents"), id);
+        int xp = event.optInt("xp", 15), gold = event.optInt("gold", 5); String notice;
+        try {
+            if ("evade".equals(choice)) { notice = "Ты обошёл опасность и продолжил путь."; }
+            else if ("pray".equals(choice)) {
+                player.put("hp", player.optInt("maxHp", 12)); grantExperience(player, Math.max(4, xp / 2)); notice = "Святилище восстановило здоровье и оставило в ладони тёплую руну.";
+                addItem(player, "Руна северного света");
+            } else if ("ask".equals(choice)) {
+                player.put("gold", player.optInt("gold") + Math.max(3, gold / 2)); grantExperience(player, Math.max(3, xp / 3));
+                incrementCount(player, "flags", "helpedWayfarers", 1); notice = "Путник рассказал о тайных тропах и поделился монетами.";
+            } else if ("help".equals(choice)) {
+                player.put("gold", player.optInt("gold") + gold); grantExperience(player, xp); incrementCount(player, "flags", "helpedWayfarers", 1);
+                addItem(player, "Письмо благодарности"); notice = "Путник спасён. Он оставил награду и обещал рассказать о тебе в Нордхейме.";
+            } else if ("open".equals(choice)) {
+                player.put("gold", player.optInt("gold") + gold * 2); grantExperience(player, xp);
+                String loot = event.optString("loot", "");
+                if (!grantGear(player, loot)) addItem(player, "Осколок старого компаса");
+                notice = "Тайник открыт: опыт, монеты и находка добавлены в рюкзак.";
+            } else {
+                boolean lucky = Math.random() > 0.3;
+                if (lucky) { player.put("gold", player.optInt("gold") + gold); grantExperience(player, xp); addItem(player, "Осколок старого компаса"); notice = "Руна вспыхнула: ты получил опыт, монеты и редкий осколок."; }
+                else { player.put("hp", Math.max(1, player.optInt("hp", 12) - Math.max(1, event.optInt("rank", 1)))); notice = "Руна обожгла ладонь. Ты потерял здоровье, но разгадал часть надписи."; }
+            }
+            savePlayer(chatId, player);
+        } catch (Exception ignored) { notice = "Событие завершено."; }
+        showGridMap(token, chatId, world, player, notice);
+    }
+
+    private void startGridEventBattle(String token, long chatId, JSONObject world, JSONObject player, String id) {
+        JSONObject event = findWorldEvent(world, id);
+        if (event == null || !"mob".equals(event.optString("kind", "")) || contains(player.optJSONArray("resolvedGridEvents"), id)) { showGridMap(token, chatId, world, player, ""); return; }
+        JSONObject battle = new JSONObject();
+        try {
+            battle.put("mode", "grid"); battle.put("eventId", id); battle.put("battleId", UUID.randomUUID().toString().substring(0, 8));
+            battle.put("regionId", player.optString("currentRegion", "harbor")); battle.put("enemyName", event.optString("enemy"));
+            battle.put("enemyHp", event.optInt("enemyHp", 10)); battle.put("enemyMaxHp", event.optInt("enemyHp", 10));
+            battle.put("enemyAttack", event.optInt("enemyAttack", 2)); battle.put("turn", 0);
+            battle.put("xpReward", event.optInt("xp", 20)); battle.put("goldReward", event.optInt("gold", 5)); battle.put("loot", event.optString("loot", ""));
+            player.put("battle", battle); savePlayer(chatId, player);
+        } catch (Exception ignored) { }
+        showOverworldBattle(token, chatId, world, player, "Найди уязвимость противника.");
+    }
+
+    private void startGridHunt(String token, long chatId, JSONObject world, JSONObject player) {
+        String regionId = regionForGrid(player.optInt("gridX", 50), player.optInt("gridY", 50));
+        JSONObject region = findRegion(world, regionId);
+        if (region == null || region.optString("enemy", "").isEmpty()) { showGridMap(token, chatId, world, player, "В безопасной зоне никто не нападает. Сделай шаг дальше от Нордхейма."); return; }
+        JSONObject battle = new JSONObject();
+        try {
+            int level = player.optInt("level", 1);
+            battle.put("mode", "grid"); battle.put("eventId", ""); battle.put("battleId", UUID.randomUUID().toString().substring(0, 8));
+            battle.put("regionId", regionId); battle.put("enemyName", region.optString("enemy"));
+            battle.put("enemyHp", region.optInt("enemyHp", 8)); battle.put("enemyMaxHp", region.optInt("enemyHp", 8));
+            battle.put("enemyAttack", region.optInt("enemyAttack", 2)); battle.put("turn", 0);
+            battle.put("xpReward", region.optInt("xp", 20) + level * 3); battle.put("goldReward", region.optInt("gold", 5));
+            battle.put("loot", region.optString("loot", "")); player.put("battle", battle); savePlayer(chatId, player);
+        } catch (Exception ignored) { }
+        showOverworldBattle(token, chatId, world, player, "Ты выследил противника в окрестностях.");
+    }
+
     private JSONObject findRegion(JSONObject world, String regionId) {
         JSONArray regions = world == null ? null : world.optJSONArray("regions");
         if (regions == null) return null;
@@ -545,7 +788,7 @@ public final class WorldBotService extends Service {
     private void handleWorldAction(String token, long chatId, String action) {
         JSONObject world = activeWorld();
         JSONObject player = loadPlayer(chatId, world, false);
-        if (action.equals("map")) { showWorldMap(token, chatId, world, player); return; }
+        if (action.equals("map")) { showGridMap(token, chatId, world, player, ""); return; }
         if (action.equals("character")) { showCharacter(token, chatId, player); return; }
         if (action.equals("inventory")) { showInventory(token, chatId, player); return; }
         if (action.equals("wardrobe")) { showWardrobe(token, chatId, player); return; }
@@ -706,8 +949,12 @@ public final class WorldBotService extends Service {
         JSONObject battle = player.optJSONObject("battle");
         if (battle == null || !expectedId.equals(battle.optString("battleId", "")) || expectedTurn != battle.optInt("turn", 0)) return;
         String regionId = battle.optString("regionId", "harbor");
+        boolean gridBattle = "grid".equals(battle.optString("mode", ""));
         if ("flee".equals(action)) {
-            player.remove("battle"); savePlayer(chatId, player); showRegion(token, chatId, world, regionId, "Ты отступил и сохранил добычу."); return;
+            player.remove("battle"); savePlayer(chatId, player);
+            if (gridBattle) showGridMap(token, chatId, world, player, "Ты отступил и сохранил добычу.");
+            else showRegion(token, chatId, world, regionId, "Ты отступил и сохранил добычу.");
+            return;
         }
         if ("potion".equals(action)) {
             if (!removeItem(player, "Зелье северной мяты")) { showOverworldBattle(token, chatId, world, player, "В рюкзаке нет зелий. Вернись в Нордхейм."); return; }
@@ -718,20 +965,29 @@ public final class WorldBotService extends Service {
             if (enemyHp <= 0) {
                 int previousKills = getCount(player.optJSONObject("kills"), regionId);
                 incrementCount(player, "kills", regionId, 1);
+                String eventId = battle.optString("eventId", "");
+                if (!eventId.isEmpty()) addString(player.optJSONArray("resolvedGridEvents"), eventId);
                 player.remove("battle");
                 try { player.put("gold", player.optInt("gold") + battle.optInt("goldReward", 0)); } catch (Exception ignored) { }
                 grantExperience(player, battle.optInt("xpReward", 0));
                 String loot = battle.optString("loot", "");
                 String lootNotice = "Победа! +" + battle.optInt("xpReward") + " опыта, +" + battle.optInt("goldReward") + " монет.";
                 if (!loot.isEmpty() && (previousKills == 0 || Math.random() < 0.28) && grantGear(player, loot)) lootNotice += " Найдена экипировка: " + gearName(loot) + "! Её можно надеть в /wardrobe.";
-                savePlayer(chatId, player); showRegion(token, chatId, world, regionId, lootNotice); return;
+                savePlayer(chatId, player);
+                if (gridBattle) showGridMap(token, chatId, world, player, lootNotice);
+                else showRegion(token, chatId, world, regionId, lootNotice);
+                return;
             }
         } else return;
         int incoming = Math.max(1, battle.optInt("enemyAttack", 1) - playerDefense(player));
         int hp = player.optInt("hp", 12) - incoming;
         if (hp <= 0) {
             try { player.put("hp", Math.max(5, player.optInt("maxHp", 12) / 2)); } catch (Exception ignored) { }
-            player.remove("battle"); savePlayer(chatId, player); showRegion(token, chatId, world, regionId, "Тебя нашли у берега. Мира помогла восстановиться, но враг остался жив — собери снаряжение и попробуй снова."); return;
+            player.remove("battle"); savePlayer(chatId, player);
+            String defeatText = "Ты отступил к безопасной клетке. Враг остался жив — восстановись и попробуй снова.";
+            if (gridBattle) showGridMap(token, chatId, world, player, defeatText);
+            else showRegion(token, chatId, world, regionId, defeatText);
+            return;
         }
         try { battle.put("turn", battle.optInt("turn", 0) + 1); player.put("hp", hp); player.put("battle", battle); } catch (Exception ignored) { }
         savePlayer(chatId, player);
