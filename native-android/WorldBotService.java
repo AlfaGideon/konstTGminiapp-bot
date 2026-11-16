@@ -1469,8 +1469,7 @@ public final class WorldBotService extends Service {
                 telegramPost(token, "deleteMessage", delete);
             } catch (Exception ignored) { }
             messageId = 0;
-            player.put("pageMessageId", 0); player.put("pageMode", textOnly ? "text" : "photo");
-            savePlayer(chatId, player);
+            try { player.put("pageMessageId", 0); player.put("pageMode", textOnly ? "text" : "photo"); savePlayer(chatId, player); } catch (Exception ignored) { }
         }
         if (messageId > 0) {
             JSONObject payload = new JSONObject();
