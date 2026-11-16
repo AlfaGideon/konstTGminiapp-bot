@@ -7,13 +7,14 @@ import android.app.Service;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
+import android.graphics.LinearGradient;
+import android.graphics.Shader;
 import android.os.Build;
 import android.os.IBinder;
 import android.util.Base64;
@@ -693,24 +694,64 @@ public final class WorldBotService extends Service {
         if (currentEvent != null && !contains(player.optJSONArray("resolvedGridEvents"), currentEvent.optString("id", ""))) {
             drawPoiMarker(canvas, centerLeft + tile - 15, centerTop + 15, currentEvent.optString("kind", "mystery"), paint);
         }
-        paint.setColor(Color.argb(110, 0, 0, 0)); canvas.drawOval(new RectF(centerLeft + 14, centerTop + 60, centerLeft + 66, centerTop + 76), paint);
-        paint.setColor(Color.rgb(255, 218, 126)); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(2.5f);
-        canvas.drawCircle(centerLeft + tile / 2f, centerTop + tile / 2f, 34, paint); paint.setStyle(Paint.Style.FILL);
-        Bitmap hero = null;
-        try { byte[] bytes = readAsset(skinImageName(player.optString("skin", "archer_trail_f"))); hero = BitmapFactory.decodeByteArray(bytes, 0, bytes.length); } catch (Exception ignored) { }
-        if (hero != null) {
-            RectF destination = new RectF(centerLeft + 19, centerTop + 6, centerLeft + 61, centerTop + 70);
-            canvas.drawBitmap(hero, null, destination, paint); hero.recycle();
-        } else {
-            paint.setColor(Color.rgb(235, 226, 204)); canvas.drawCircle(centerLeft + 40, centerTop + 28, 9, paint);
-            paint.setColor(Color.rgb(75, 104, 77)); canvas.drawRoundRect(new RectF(centerLeft + 26, centerTop + 36, centerLeft + 54, centerTop + 68), 9, 9, paint);
-        }
+        float heroCenterX = centerLeft + tile / 2f, heroCenterY = centerTop + tile / 2f;
+        drawHeroPawn(canvas, heroCenterX, heroCenterY, paint);
         paint.setColor(Color.argb(55, 202, 232, 248)); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1);
         canvas.drawRoundRect(frame, 30, 30, paint); paint.setStyle(Paint.Style.FILL);
-        String fileName = "grid-map-" + (chatId < 0 ? "m" + (-chatId) : Long.toString(chatId)) + ".png";
-        try (FileOutputStream output = new FileOutputStream(new File(getCacheDir(), fileName))) {
+        String chatToken = chatId < 0 ? "m" + (-chatId) : Long.toString(chatId);
+        String revision = Long.toString(System.nanoTime() & Long.MAX_VALUE);
+        String fileName = "grid-map-" + chatToken + "-" + centerX + "-" + centerY + "-" + revision + ".png";
+        File imageFile = new File(getCacheDir(), "grid-map-current-" + chatToken + ".png");
+        try (FileOutputStream output = new FileOutputStream(imageFile)) {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, output); output.flush(); bitmap.recycle(); return fileName;
         } catch (Exception ignored) { bitmap.recycle(); return MAP_IMAGE; }
+    }
+
+    private void drawHeroPawn(Canvas canvas, float cx, float cy, Paint paint) {
+        // A shaded chess-pawn figurine is drawn from vector shapes, not a flat skin bitmap.
+        paint.setShader(null); paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.argb(135, 5, 11, 15));
+        canvas.drawOval(new RectF(cx - 20, cy + 27, cx + 20, cy + 34), paint);
+
+        paint.setShader(new LinearGradient(cx - 19, cy + 22, cx + 19, cy + 31,
+            new int[] {Color.rgb(91, 50, 25), Color.rgb(255, 214, 124), Color.rgb(126, 69, 29)}, null, Shader.TileMode.CLAMP));
+        canvas.drawOval(new RectF(cx - 19, cy + 21, cx + 19, cy + 30), paint);
+        paint.setShader(new LinearGradient(cx - 15, cy + 18, cx + 15, cy + 26,
+            new int[] {Color.rgb(130, 72, 31), Color.rgb(255, 225, 151), Color.rgb(165, 92, 38)}, null, Shader.TileMode.CLAMP));
+        canvas.drawOval(new RectF(cx - 15, cy + 17, cx + 15, cy + 25), paint);
+
+        Path body = new Path();
+        body.moveTo(cx - 5.5f, cy + 17);
+        body.cubicTo(cx - 5.5f, cy + 11, cx - 10, cy + 8, cx - 10, cy + 3);
+        body.cubicTo(cx - 10, cy - 2, cx - 5, cy - 3, cx - 5, cy - 9);
+        body.lineTo(cx + 5, cy - 9);
+        body.cubicTo(cx + 5, cy - 3, cx + 10, cy - 2, cx + 10, cy + 3);
+        body.cubicTo(cx + 10, cy + 8, cx + 5.5f, cy + 11, cx + 5.5f, cy + 17);
+        body.cubicTo(cx + 10, cy + 18, cx + 14, cy + 19, cx + 15, cy + 22);
+        body.lineTo(cx - 15, cy + 22);
+        body.cubicTo(cx - 14, cy + 19, cx - 10, cy + 18, cx - 5.5f, cy + 17);
+        body.close();
+        paint.setShader(new LinearGradient(cx - 16, cy, cx + 16, cy,
+            new int[] {Color.rgb(105, 54, 25), Color.rgb(255, 220, 137), Color.rgb(211, 139, 57), Color.rgb(91, 45, 22)},
+            new float[] {0f, .35f, .66f, 1f}, Shader.TileMode.CLAMP));
+        canvas.drawPath(body, paint);
+        paint.setShader(null); paint.setColor(Color.rgb(255, 231, 174)); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.1f);
+        Path glint = new Path(); glint.moveTo(cx - 8, cy + 12); glint.cubicTo(cx - 10, cy + 6, cx - 5, cy + 1, cx - 5, cy - 6);
+        canvas.drawPath(glint, paint); paint.setStyle(Paint.Style.FILL);
+
+        // Head, with a bright cap and shaded rim to suggest polished carved wood/metal.
+        paint.setShader(new LinearGradient(cx - 8, cy - 17, cx + 8, cy - 4,
+            new int[] {Color.rgb(255, 229, 155), Color.rgb(205, 128, 49), Color.rgb(105, 53, 24)}, null, Shader.TileMode.CLAMP));
+        canvas.drawCircle(cx, cy - 17, 8.1f, paint); paint.setShader(null);
+        paint.setColor(Color.argb(220, 255, 241, 201)); canvas.drawCircle(cx - 2.5f, cy - 19.5f, 2.0f, paint);
+        paint.setColor(Color.rgb(106, 57, 28)); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.2f);
+        canvas.drawCircle(cx, cy - 17, 8.1f, paint); paint.setStyle(Paint.Style.FILL);
+
+        // Tiny embossed bow mark gives the pawn a little character while keeping its chess-piece silhouette.
+        paint.setColor(Color.rgb(105, 53, 22)); paint.setStrokeWidth(1.5f); paint.setStrokeCap(Paint.Cap.ROUND); paint.setStyle(Paint.Style.STROKE);
+        canvas.drawArc(new RectF(cx - 4, cy + 3, cx + 3, cy + 11), 250, 220, false, paint);
+        canvas.drawLine(cx - 3, cy + 10, cx + 4, cy + 3, paint);
+        paint.setStyle(Paint.Style.FILL); paint.setStrokeCap(Paint.Cap.BUTT); paint.setShader(null);
     }
 
     private void drawMapTile(Canvas canvas, RectF rect, int x, int y, JSONObject world, JSONObject player, Paint paint) {
@@ -1623,8 +1664,12 @@ public final class WorldBotService extends Service {
 
     private byte[] readAsset(String assetName) throws Exception {
         if (assetName == null || !assetName.matches("[A-Za-z0-9._-]+")) throw new IllegalArgumentException("Invalid image asset name");
-        InputStream source = assetName.matches("grid-map-(?:m)?[0-9]+\\.png")
-            ? new FileInputStream(new File(getCacheDir(), assetName)) : getAssets().open("botcraft/" + assetName);
+        InputStream source;
+        if (assetName.matches("grid-map-(?:m)?[0-9]+-[0-9]+-[0-9]+-[0-9]+\\.png")) {
+            int chatEnd = assetName.indexOf('-', 9);
+            String chatToken = assetName.substring(9, chatEnd);
+            source = new FileInputStream(new File(getCacheDir(), "grid-map-current-" + chatToken + ".png"));
+        } else source = getAssets().open("botcraft/" + assetName);
         try (InputStream input = source; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[8192]; int count;
             while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
