@@ -390,7 +390,6 @@ public final class WorldBotService extends Service {
                     addButtonRow(keyboard, choice.optString("label", "Продолжить"), "pick:" + nodeId + ":" + i);
                 }
                 if (keyboard.length() == 0) {
-                    JSONArray choices = node.optJSONArray("choices");
                     if (choices != null && choices.length() > 0) addButtonRow(keyboard, "📜 Проверить задания", "ow:quests");
                     else {
                         String next = node.optString("next", "");
@@ -848,7 +847,7 @@ public final class WorldBotService extends Service {
             .append("\n\nЗадания можно принимать параллельно и проходить в своём порядке.");
         JSONArray keyboard = new JSONArray(); JSONObject states = player.optJSONObject("quests");
         try {
-            int first = page * 4, last = Math.min(first + 4, quests.length());
+            int first = page * 4, last = Math.min(first + 4, quests.length);
             for (int i = first; i < last; i++) {
                 String[] quest = quests[i]; String status = states == null ? "" : states.optString(quest[0], "");
                 String progress = questProgress(player, quest[0]);
