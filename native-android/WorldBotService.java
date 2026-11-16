@@ -234,7 +234,7 @@ public final class WorldBotService extends Service {
                 JSONObject world = activeWorld();
                 String startId = startNodeId(world);
                 if (startId.isEmpty()) sendText(token, chatId, "Сначала выбери и запусти игровой мир в APK.");
-                else sendScene(token, chatId, world, startId, true, true);
+                else restartStory(token, chatId, world, 0L);
             } else if (text.startsWith("/inventory")) {
                 showInventory(token, chatId, loadPlayer(chatId, activeWorld(), false));
             } else if (!text.isEmpty()) {
@@ -274,9 +274,41 @@ public final class WorldBotService extends Service {
             String target = current == null ? "" : current.optString("next", "");
             if (!target.isEmpty()) sendScene(token, chatId, world, target, true);
         } else if ("restart".equals(data)) {
-            JSONObject world = activeWorld(); String start = startNodeId(world);
-            if (!start.isEmpty()) sendScene(token, chatId, world, start, true, true);
+            JSONObject world = activeWorld();
+            restartStory(token, chatId, world, callbackMessage.optLong("message_id", 0L));
         }
+    }
+
+    private void restartStory(String token, long chatId, JSONObject world, long callbackMessageId) {
+        String start = startNodeId(world);
+        if (start.isEmpty()) { sendText(token, chatId, "Сначала выбери и запусти игровой мир в APK."); return; }
+        JSONObject previous = loadPlayer(chatId, world, false);
+        deletePreviousGameMessages(token, chatId, previous, callbackMessageId);
+        sendScene(token, chatId, world, start, true, true);
+    }
+
+    private void deletePreviousGameMessages(String token, long chatId, JSONObject player, long extraMessageId) {
+        if (player == null) return;
+        JSONArray ids = new JSONArray(); JSONArray tracked = player.optJSONArray("pageMessageIds");
+        if (tracked != null) for (int i = 0; i < tracked.length(); i++) addUniqueMessageId(ids, tracked.optLong(i));
+        addUniqueMessageId(ids, player.optLong("pageMessageId", 0L));
+        addUniqueMessageId(ids, extraMessageId);
+        for (int i = 0; i < ids.length(); i++) {
+            long messageId = ids.optLong(i, 0L); if (messageId <= 0L) continue;
+            try {
+                JSONObject payload = new JSONObject(); payload.put("chat_id", chatId); payload.put("message_id", messageId);
+                telegramPost(token, "deleteMessage", payload);
+            } catch (Exception ignored) { }
+        }
+        try { player.put("pageMessageId", 0L); player.put("pageMode", "photo"); player.put("pageImage", ""); player.put("pageMessageIds", new JSONArray()); }
+        catch (Exception ignored) { }
+        savePlayer(chatId, player);
+    }
+
+    private void addUniqueMessageId(JSONArray ids, long messageId) {
+        if (ids == null || messageId <= 0L) return;
+        for (int i = 0; i < ids.length(); i++) if (ids.optLong(i, 0L) == messageId) return;
+        try { ids.put(messageId); } catch (Exception ignored) { }
     }
 
     private String startNodeId(JSONObject world) {
@@ -295,10 +327,8 @@ public final class WorldBotService extends Service {
         try {
             JSONObject players = new JSONObject(prefs().getString(PLAYER_STATES_KEY, "{}"));
             JSONObject player = players.optJSONObject(key);
-            if (reset) {
-                JSONObject previous = player; player = newPlayer(worldId);
-                if (previous != null) { player.put("pageMessageId", previous.optLong("pageMessageId", 0L)); player.put("pageMode", previous.optString("pageMode", "photo")); }
-            } else if (player == null || !worldId.equals(player.optString("worldId", ""))) player = newPlayer(worldId);
+            if (reset) player = newPlayer(worldId);
+            else if (player == null || !worldId.equals(player.optString("worldId", ""))) player = newPlayer(worldId);
             migratePlayer(player);
             players.put(key, player);
             prefs().edit().putString(PLAYER_STATES_KEY, players.toString()).apply();
@@ -333,7 +363,7 @@ public final class WorldBotService extends Service {
             player.put("currentRegion", "harbor"); player.put("currentMode", "story");
             player.put("gridX", 50); player.put("gridY", 50); player.put("resolvedGridEvents", new JSONArray());
             player.put("flags", new JSONObject()); player.put("visited", new JSONArray());
-            player.put("clearedBattles", new JSONArray()); player.put("currentNode", ""); player.put("pageMessageId", 0);
+            player.put("clearedBattles", new JSONArray()); player.put("currentNode", ""); player.put("pageMessageId", 0); player.put("pageMessageIds", new JSONArray());
         } catch (Exception ignored) { }
         normalizeWallet(player);
         addItem(player, "Зелье северной мяты");
@@ -367,6 +397,8 @@ public final class WorldBotService extends Service {
             if (!player.has("processedSkinPayments")) player.put("processedSkinPayments", new JSONArray());
             unlockSkins(player);
             if (!player.has("pageMessageId")) player.put("pageMessageId", 0);
+            if (!player.has("pageMessageIds")) player.put("pageMessageIds", new JSONArray());
+            addUniqueMessageId(player.optJSONArray("pageMessageIds"), player.optLong("pageMessageId", 0L));
             if (!player.has("maxHp")) player.put("maxHp", 12);
             if (!player.has("hp")) player.put("hp", player.optInt("maxHp", 12));
             if (!player.has("silver")) player.put("silver", 0);
@@ -439,6 +471,8 @@ public final class WorldBotService extends Service {
         if (!body.isEmpty()) narrative.append("\n\n").append(body);
         narrative.append("\n\n").append(playerSummary(player));
         if ("inventory".equals(node.optString("type"))) narrative.append("\n\nСодержимое рюкзака: ").append(inventoryText(player));
+        JSONObject npc = node.optJSONObject("npc");
+        if (npc != null) appendNpcProfile(narrative, npc);
 
         JSONObject markup = new JSONObject();
         JSONArray keyboard = new JSONArray();
@@ -483,6 +517,25 @@ public final class WorldBotService extends Service {
         sendGamePage(token, chatId, limit(narrative.toString(), 1000), markup, sceneImage);
     }
 
+    private void appendNpcProfile(StringBuilder narrative, JSONObject npc) {
+        String name = npc.optString("name", "Персонаж");
+        String role = npc.optString("role", "");
+        narrative.append("\n\n👤 ").append(name);
+        if (!role.isEmpty()) narrative.append(" · ").append(role);
+        String appearance = npc.optString("appearance", "");
+        if (!appearance.isEmpty()) narrative.append("\nПриметы: ").append(appearance);
+        String location = npc.optString("location", "");
+        if (!location.isEmpty()) narrative.append("\nМесто: ").append(location);
+        JSONObject stats = npc.optJSONObject("stats");
+        if (stats != null) narrative.append("\nПараметры: СИЛ ").append(stats.optInt("strength"))
+            .append(" · ЛОВ ").append(stats.optInt("agility"))
+            .append(" · ХАР ").append(stats.optInt("charisma"))
+            .append(" · ЧУТ ").append(stats.optInt("insight"))
+            .append(" · ВОЛЯ ").append(stats.optInt("resolve"));
+        String traits = npc.optString("traits", "");
+        if (!traits.isEmpty()) narrative.append("\nХарактер: ").append(traits);
+    }
+
     private void addButtonRow(JSONArray keyboard, String label, String callbackData) throws Exception {
         JSONObject button = new JSONObject(); button.put("text", limit(label, 64)); button.put("callback_data", callbackData);
         JSONArray row = new JSONArray(); row.put(button); keyboard.put(row);
@@ -513,8 +566,8 @@ public final class WorldBotService extends Service {
         }
         JSONObject effect = choice.optJSONObject("effect");
         if (effect != null && "reset".equals(effect.optString("type"))) {
-            JSONObject previous = player; player = newPlayer(world.optString("id", ""));
-            try { player.put("pageMessageId", previous.optLong("pageMessageId", 0L)); player.put("pageMode", previous.optString("pageMode", "photo")); } catch (Exception ignored) { }
+            deletePreviousGameMessages(token, chatId, player, 0L);
+            player = newPlayer(world.optString("id", ""));
         } else if (effect != null && !applyEffect(player, effect)) {
             sendText(token, chatId, "Не хватает монет или нужного предмета.");
             sendScene(token, chatId, world, node.optString("id", ""), false);
@@ -2062,7 +2115,9 @@ public final class WorldBotService extends Service {
                 : telegramPost(token, "sendMessage", payload);
             JSONObject message = sent.optJSONObject("result");
             if (message != null) {
-                player.put("pageMessageId", message.optLong("message_id", 0L));
+                long sentMessageId = message.optLong("message_id", 0L);
+                player.put("pageMessageId", sentMessageId);
+                addUniqueMessageId(player.optJSONArray("pageMessageIds"), sentMessageId);
                 player.put("pageMode", desiredMode); player.put("pageImage", desiredImage); savePlayer(chatId, player);
             }
         } catch (Exception ignored) { }

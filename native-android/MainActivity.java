@@ -277,12 +277,12 @@ public class MainActivity extends Activity {
 
     private void seedStarterCampaign() {
         JSONObject existing = findProject(STARTER_WORLD_ID);
-        if (existing != null && existing.optInt("campaignVersion", 0) >= 3) return;
+        if (existing != null && existing.optInt("campaignVersion", 0) >= 4) return;
         if (existing != null && worldNodes(existing).length() > 0) {
             seedOpenWorld(existing);
             seedGridWorld(existing);
             upgradeCampaignStory(existing);
-            try { existing.put("campaignVersion", 3); existing.put("updatedAt", System.currentTimeMillis()); } catch (Exception ignored) { }
+            try { existing.put("campaignVersion", 4); existing.put("updatedAt", System.currentTimeMillis()); } catch (Exception ignored) { }
             saveProjects();
             return;
         }
@@ -371,7 +371,8 @@ public class MainActivity extends Activity {
             world.put("nodes", nodes);
             seedOpenWorld(world);
             seedGridWorld(world);
-            world.put("campaignVersion", 3);
+            ensureCampaignStoryExpansion(world);
+            world.put("campaignVersion", 4);
             if (existing == null) projects.add(world);
             saveProjects();
             if (preferences.getString(ACTIVE_WORLD_KEY, "").isEmpty()) preferences.edit().putString(ACTIVE_WORLD_KEY, STARTER_WORLD_ID).apply();
@@ -486,6 +487,75 @@ public class MainActivity extends Activity {
                 }
             } catch (Exception ignored) { }
         }
+        ensureCampaignStoryExpansion(world);
+    }
+
+    private void ensureCampaignStoryExpansion(JSONObject world) {
+        if (world == null) return;
+        JSONArray nodes = worldNodes(world);
+        try {
+            if (findNode(world, "na_torm") == null) {
+                JSONObject torm = storyNode("na_torm", "npc", "Торм · книга ночных заказов",
+                    "Над лавкой пахнет мокрой шерстью и горьким кофе. Торм запирает дверь, замечает медный знак на твоём снаряжении и впервые перестаёт улыбаться. В книге заказов рядом с именем Миры стоит запись: «запустить маяк в ночь девятого колокола».\n\n«Я продал ей ключ, не бурю», — говорит он. «Если услышишь под маяком голоса — не отвечай им своим именем». За стеной трижды стучат, хотя наверху никого нет.", "npc-torm.png");
+                setNpcProfile(torm, "Торм Эйд", "портовый торговец и бывший штурман", "Крепкий пожилой мужчина с обветренным лицом, седой косой и мутным левым глазом; носит залатанный синий кафтан и медный напёрсток на шнурке.", "Подозрительный, наблюдательный, бережёт людей порта", 5, 4, 7, 9, 6, "Лавка у причала · тайная комната над складом");
+                nodes.put(torm);
+            }
+            if (findNode(world, "na_ingrid") == null) {
+                JSONObject ingrid = storyNode("na_ingrid", "npc", "Ингрид · трактир «Мёртвый компас»",
+                    "В трактире огонь горит синим, хотя в печи только уголь. Ингрид вытирает один и тот же стакан и просит говорить тише: в эту ночь пустые каюты отвечают голосами погибших.\n\nОна показывает журнал смен: Мира приходила сюда уже дважды до начала девятидневной тьмы. В последний раз она просила Ингрид никому не говорить, что маяк не погас — его кто-то намеренно заставил замолчать.", "npc-ingrid.png");
+                setNpcProfile(ingrid, "Ингрид Вейл", "хозяйка трактира, бывшая корабельная лекарка", "Высокая женщина средних лет с длинной серебряной косой, тонким шрамом у брови и тёмно-бирюзовым платьем под ржаво-красным фартуком.", "Сдержанная, сострадательная, не терпит угроз", 4, 7, 8, 8, 9, "Трактир «Мёртвый компас» · зал и подсобная комната");
+                nodes.put(ingrid);
+            }
+            if (findNode(world, "na_osk") == null) {
+                JSONObject osk = storyNode("na_osk", "npc", "Оскар · под маяком",
+                    "За винными бочками обнаруживается каменная лестница. Внизу, в комнате с картами приливов и разбитой линзой, прячется Оскар — бывший смотритель маяка. Он не призрак и не предатель: девять лет назад его дочь пропала в ледяном море, и с тех пор из линзы доносится её голос.\n\n«Мира не хочет разбудить мёртвых. Она хочет заставить их замолчать навсегда», — шепчет он. Оскар уверен, что Полярное Сердце удерживает бурю и голоса погибших вместе. Служебная лестница ведёт прямо к внутренней двери маяка.", "npc-osk.png");
+                setNpcProfile(osk, "Оскар Нур", "бывший смотритель маяка и часовщик линз", "Худой мужчина около шестидесяти лет с бледным лицом, белыми прядями в тёмных волосах и чёрным промасленным плащом; держит тяжёлый латунный ключ.", "Пугливый, точный, верен памяти дочери", 3, 6, 5, 10, 8, "Скрытая картографическая комната под маяком");
+                nodes.put(osk);
+            }
+            if (findNode(world, "na_mira_truth") == null) {
+                JSONObject truth = storyNode("na_mira_truth", "npc", "Мира · правда о Полярном Сердце",
+                    "После победы над Вейром ты показываешь Мире запись из книги Торма. Она долго молчит, а затем признаётся: её брат был среди команды, пропавшей у маяка. Мира вернулась за Сердцем не ради власти — она хочет прекратить голоса, даже если для этого придётся погасить свет навсегда.\n\nОскар верит, что души можно освободить, только расколов линзу. Мира уверена, что это уничтожит весь порт. У тебя остаются три правды и ни одного безопасного выбора.", "02-cartographer.jpg");
+                setNpcProfile(truth, "Мира Соль", "картограф архипелага, ученица смотрителя", "Молодая картограф с короткой каштановой стрижкой, серо-зелёными глазами и чернильными следами на пальцах; поверх куртки накинута выцветшая карта приливов.", "Умная, измученная виной, не говорит всей правды", 4, 8, 9, 10, 7, "Верхняя галерея маяка · комната линз");
+                nodes.put(truth);
+            }
+            if (findNode(world, "na_ending_seal") == null) {
+                JSONObject seal = storyNode("na_ending_seal", "ending", "Тишина подо льдом",
+                    "Ты не отдаёшь Сердце ни маяку, ни себе. Вместе с Оскаром ты запечатываешь его в ледяной часовне над бухтой. В ту же секунду впервые за девять дней становится тихо.\n\nСвет в Нордхейме остаётся тусклым, зато корабельные огни один за другим вспыхивают на горизонте: погибшая команда уходит в открытое море. Мира оставляет тебе карту новых берегов — и обещание больше не скрывать цену своих решений.", "");
+                addStoryChoice(seal, "Начать новую историю", "na_intro", "reset", "", 0, "", "");
+                nodes.put(seal);
+            }
+            JSONObject market = findNode(world, "na_market");
+            addChoiceIfMissing(market, "Проверить книгу заказов Торма", "na_torm", "", "", 0, "", "");
+            addChoiceIfMissing(market, "Зайти в трактир за слухами", "na_ingrid", "", "", 0, "", "");
+            addChoiceIfMissing(findNode(world, "na_torm"), "Показать Торму медный знак", "na_ingrid", "flag", "torm_mark", 1, "", "");
+            addChoiceIfMissing(findNode(world, "na_torm"), "Спросить о служебной лестнице", "na_osk", "", "", 0, "", "");
+            addChoiceIfMissing(findNode(world, "na_torm"), "Уйти к затонувшему кораблю", "na_wreck", "", "", 0, "", "");
+            addChoiceIfMissing(findNode(world, "na_ingrid"), "Проверить журнал смен вместе с Ингрид", "na_osk", "flag", "inn_ledger", 1, "", "");
+            addChoiceIfMissing(findNode(world, "na_ingrid"), "Попросить её позвать Торма", "na_torm", "", "", 0, "", "");
+            addChoiceIfMissing(findNode(world, "na_osk"), "Взять ключ и войти в маяк по тайной лестнице", "na_lighthouse", "item", "Ключ смотрителя", 0, "", "");
+            addChoiceIfMissing(findNode(world, "na_osk"), "Вернуться к Мире с предупреждением", "na_mira", "", "", 0, "", "");
+            addChoiceIfMissing(findNode(world, "na_lighthouse"), "Открыть служебный ход ключом", "na_bridge", "consume", "Ключ смотрителя", 0, "Ключ смотрителя", "");
+            addChoiceIfMissing(findNode(world, "na_ending"), "Потребовать у Миры правду", "na_mira_truth", "", "", 0, "", "");
+            addChoiceIfMissing(findNode(world, "na_mira_truth"), "Вернуть Сердце и зажечь маяк", "na_ending_lighthouse", "", "", 0, "", "");
+            addChoiceIfMissing(findNode(world, "na_mira_truth"), "Забрать силу себе", "na_ending_power", "", "", 0, "", "");
+            addChoiceIfMissing(findNode(world, "na_mira_truth"), "Запечатать Сердце и отпустить экипаж", "na_ending_seal", "", "", 0, "", "");
+        } catch (Exception ignored) { }
+    }
+
+    private void setNpcProfile(JSONObject node, String name, String role, String appearance, String traits, int strength, int agility, int charisma, int insight, int resolve, String location) {
+        try {
+            JSONObject npc = new JSONObject(); npc.put("name", name); npc.put("role", role); npc.put("appearance", appearance); npc.put("traits", traits);
+            npc.put("location", location); npc.put("portrait", node.optString("image", ""));
+            JSONObject stats = new JSONObject(); stats.put("strength", strength); stats.put("agility", agility); stats.put("charisma", charisma); stats.put("insight", insight); stats.put("resolve", resolve);
+            npc.put("stats", stats); node.put("npc", npc);
+        } catch (Exception ignored) { }
+    }
+
+    private void addChoiceIfMissing(JSONObject node, String label, String target, String effect, String item, int amount, String requiresItem, String fallback) {
+        if (node == null) return;
+        JSONArray choices = node.optJSONArray("choices");
+        if (choices != null) for (int i = 0; i < choices.length(); i++) { JSONObject choice = choices.optJSONObject(i); if (choice != null && label.equals(choice.optString("label"))) return; }
+        addStoryChoice(node, label, target, effect, item, amount, requiresItem, fallback);
     }
 
     private void addOpenRegion(JSONArray regions, String id, String title, String text, int minLevel, int enemyHp, int enemyAttack, int xp, int gold, String loot, String exits, int x, int y) throws Exception {
@@ -567,7 +637,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams slp = params(-1, -2); slp.topMargin = dp(18); page.addView(start, slp);
 
         LinearLayout campaign = cardColumn();
-        TextView campaignBadge = text("14 СЦЕН · 13 ЛОКАЦИЙ · 2 КОНЦОВКИ", 10, colorPrimary(), true);
+        TextView campaignBadge = text("19 СЦЕН · 13 ЛОКАЦИЙ · 3 КОНЦОВКИ", 10, colorPrimary(), true);
         campaign.addView(campaignBadge);
         TextView campaignTitle = text("Сердце Полуночного Архипелага", 18, colorText(), true);
         LinearLayout.LayoutParams campaignTitleLp = params(-1, -2); campaignTitleLp.topMargin = dp(7); campaign.addView(campaignTitle, campaignTitleLp);
